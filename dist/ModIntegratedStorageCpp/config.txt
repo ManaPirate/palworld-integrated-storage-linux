@@ -1,0 +1,22 @@
+# ============================================================================
+#  IntegratedStorage - configuration            (Author: Sarfflow)
+#  Lines starting with '#' or ';' are comments. Format:  key = value
+#  Delete this file (or a line) to use the built-in default for that key.
+# ============================================================================
+
+# verbose : detailed [ISGATE] diagnostics in UE4SS.log (menu-open / request /
+#           reply traces on the client, per-chest + discovery traces on the
+#           server). Defaults to ON so any field issue is easy to report with a
+#           log. Set to false once everything works to keep the log quiet.
+#           Values: true / false
+verbose = true
+
+# reconcile_interval_ms : (dedicated server / host only) how often the server
+#           re-scans every guild chest from the map-object manager and re-applies
+#           the cross-camp merge. Lower = faster to notice a camp being built or
+#           dismantled, higher = less background work. Minimum 500.
+reconcile_interval_ms = 8000
+
+# isi_refresh_ms : (reserved / config-compat) remote-client refresh cadence.
+#           Kept for backward compatibility with older configs. Minimum 200.
+isi_refresh_ms = 1500

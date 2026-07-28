@@ -1,0 +1,24 @@
+# Build output
+build/
+.xmake/
+*.o
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# Compiled mod binaries (build these yourself; see README)
+*.dll
+*.dylib
+*.so
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Dev scratch
+*.bak
+*.tmp
