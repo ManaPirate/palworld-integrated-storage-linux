@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4a read-only base-camp, guild and storage discovery.
-No chest traversal, cross-registration, transport or container mutation is enabled.
+Stage 4b.2 process-lifetime module pin and read-only game-thread chest-to-camp and chest-to-guild association.
+No raw chest-map traversal, cross-registration, transport, item routing or container mutation is enabled.
 EOF
 
 echo

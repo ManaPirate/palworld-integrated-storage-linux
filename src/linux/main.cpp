@@ -21,6 +21,7 @@
 // The upstream Windows implementation remains in ../dllmain.cpp and
 // is intentionally unchanged.
 
+#include <Unreal/UnrealInitializer.hpp>
 #include <array>
 #include <chrono>
 #include <cstdarg>
@@ -41,6 +42,54 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
+#include <Unreal/Hooks/Hooks.hpp>
+#include <atomic>
+#include <dlfcn.h>
+#include <memory>
+#include <thread>
+
+namespace ModIntegratedStorageModulePin
+{
+    // Intentionally retained until process exit.
+    //
+    // NullPrism's CppMod wrapper owns the original dlopen handle
+    // and can close it after uninstall_mod. This additional loader
+    // reference keeps callback code mapped until PalServer exits.
+    void* g_process_lifetime_pin{};
+
+    auto pin_for_process_lifetime() noexcept -> bool
+    {
+        if (g_process_lifetime_pin != nullptr)
+        {
+            return true;
+        }
+
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        g_process_lifetime_pin =
+            dlopen(
+                module_info.dli_fname,
+                RTLD_NOW | RTLD_LOCAL
+            );
+
+        return g_process_lifetime_pin != nullptr;
+    }
+}
+
 
 namespace
 {
@@ -352,6 +401,68 @@ namespace
         return parameters.ReturnValue ? 1 : 0;
     }
 
+    std::atomic_bool g_chest_association_requested{false};
+    std::atomic_bool g_chest_association_running{false};
+    std::atomic_bool g_chest_association_enabled{false};
+
+    std::atomic_uint32_t g_engine_tick_entries{0};
+    std::atomic_uint64_t g_chest_association_runs{0};
+
+    RC::Unreal::Hook::GlobalCallbackId
+        g_engine_tick_callback_id{
+            RC::Unreal::Hook::ERROR_ID
+        };
+
+    class EngineTickEntryGuard final
+    {
+      public:
+        EngineTickEntryGuard() noexcept
+        {
+            g_engine_tick_entries.fetch_add(
+                1,
+                std::memory_order_acq_rel
+            );
+        }
+
+        ~EngineTickEntryGuard()
+        {
+            g_engine_tick_entries.fetch_sub(
+                1,
+                std::memory_order_acq_rel
+            );
+        }
+
+        EngineTickEntryGuard(
+            const EngineTickEntryGuard&
+        ) = delete;
+
+        auto operator=(
+            const EngineTickEntryGuard&
+        ) -> EngineTickEntryGuard& = delete;
+    };
+
+    class AssociationRunningGuard final
+    {
+      public:
+        AssociationRunningGuard() = default;
+
+        ~AssociationRunningGuard()
+        {
+            g_chest_association_running.store(
+                false,
+                std::memory_order_release
+            );
+        }
+
+        AssociationRunningGuard(
+            const AssociationRunningGuard&
+        ) = delete;
+
+        auto operator=(
+            const AssociationRunningGuard&
+        ) -> AssociationRunningGuard& = delete;
+    };
+
     auto reset_world_state() noexcept -> void
     {
         g_is_server = -1;
@@ -359,6 +470,11 @@ namespace
 
         g_last_discovery = Clock::time_point{};
         g_discovery_runs = 0;
+
+        g_chest_association_requested.store(
+            false,
+            std::memory_order_release
+        );
 
         emit_marker(
             "[ModIntegratedStorageCpp] WORLD state reset"
@@ -474,6 +590,20 @@ namespace
         //
         // Retain one process-lifetime buffer and reuse its capacity.
         // clear() removes pointer elements without releasing storage.
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
+    auto get_chest_discovery_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        // FindAllOf populates this vector inside libUE4SS.so.
+        //
+        // As with the Stage-4a camp buffer, retain it for process
+        // lifetime so main.so never destroys storage allocated while
+        // libUE4SS.so was operating on the vector.
         static auto* buffer =
             new std::vector<RC::Unreal::UObject*>{};
 
@@ -652,6 +782,372 @@ namespace
         }
     }
 
+    auto association_class_is(
+        RC::Unreal::UObject* object,
+        RC::Unreal::UClass* expected
+    ) -> bool
+    {
+        if (
+            object == nullptr ||
+            expected == nullptr
+        )
+        {
+            return false;
+        }
+
+        RC::Unreal::UStruct* current =
+            object->GetClassPrivate();
+
+        while (current != nullptr)
+        {
+            if (current == expected)
+            {
+                return true;
+            }
+
+            current = current->GetSuperStruct();
+        }
+
+        return false;
+    }
+
+    auto get_base_camp_class()
+        -> RC::Unreal::UClass*
+    {
+        static auto* base_camp_class =
+            RC::Unreal::UObjectGlobals::StaticFindObject<
+                RC::Unreal::UClass*>(
+                nullptr,
+                nullptr,
+                STR("/Script/Pal.PalBaseCampModel")
+            );
+
+        return base_camp_class;
+    }
+
+    auto request_read_only_chest_association() noexcept
+        -> void
+    {
+        if (
+            !g_chest_association_enabled.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        g_chest_association_requested.store(
+            true,
+            std::memory_order_release
+        );
+    }
+
+    auto run_read_only_chest_association() -> void
+    {
+        auto& chests = get_chest_discovery_buffer();
+        chests.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalMapObjectItemChestModel"),
+            chests
+        );
+
+        auto* base_camp_class =
+            get_base_camp_class();
+
+        RC::Unreal::UFunction* association_function{};
+
+        std::size_t parameter_size{};
+        std::size_t return_offset{};
+
+        std::unique_ptr<std::byte[]> parameters{};
+
+        std::unordered_map<
+            GuildKey,
+            std::size_t,
+            GuildKeyHash
+        > guild_chests{};
+
+        std::unordered_set<
+            RC::Unreal::UObject*
+        > associated_camps{};
+
+        std::size_t valid_chests{};
+        std::size_t null_chests{};
+        std::size_t associated_chests{};
+        std::size_t unassociated_chests{};
+        std::size_t missing_functions{};
+        std::size_t invalid_parameter_layouts{};
+        std::size_t invalid_camps{};
+        std::size_t missing_guild_properties{};
+        std::size_t zero_guild_keys{};
+
+        for (auto* chest : chests)
+        {
+            if (chest == nullptr)
+            {
+                ++null_chests;
+                continue;
+            }
+
+            ++valid_chests;
+
+            if (association_function == nullptr)
+            {
+                association_function =
+                    chest->GetFunctionByNameInChain(
+                        STR("GetBaseCampModelBelongTo")
+                    );
+
+                if (association_function == nullptr)
+                {
+                    ++missing_functions;
+                    continue;
+                }
+
+                parameter_size =
+                    static_cast<std::size_t>(
+                        association_function->
+                            GetParmsSize()
+                    );
+
+                return_offset =
+                    static_cast<std::size_t>(
+                        association_function->
+                            GetReturnValueOffset()
+                    );
+
+                if (
+                    parameter_size <
+                        sizeof(
+                            RC::Unreal::UObject*
+                        ) ||
+                    return_offset >
+                        parameter_size -
+                            sizeof(
+                                RC::Unreal::UObject*
+                            )
+                )
+                {
+                    association_function = nullptr;
+                    parameter_size = 0;
+                    return_offset = 0;
+
+                    ++invalid_parameter_layouts;
+                    continue;
+                }
+
+                parameters =
+                    std::make_unique<
+                        std::byte[]
+                    >(parameter_size);
+            }
+
+            std::memset(
+                parameters.get(),
+                0,
+                parameter_size
+            );
+
+            chest->ProcessEvent(
+                association_function,
+                parameters.get()
+            );
+
+            RC::Unreal::UObject* camp{};
+
+            std::memcpy(
+                &camp,
+                parameters.get() + return_offset,
+                sizeof(camp)
+            );
+
+            if (camp == nullptr)
+            {
+                ++unassociated_chests;
+                continue;
+            }
+
+            if (
+                !association_class_is(
+                    camp,
+                    base_camp_class
+                )
+            )
+            {
+                ++invalid_camps;
+                continue;
+            }
+
+            GuildKey guild_key{};
+
+            if (!copy_guild_key(camp, guild_key))
+            {
+                ++missing_guild_properties;
+                continue;
+            }
+
+            if (guid_is_zero(guild_key))
+            {
+                ++zero_guild_keys;
+                continue;
+            }
+
+            ++associated_chests;
+            ++guild_chests[guild_key];
+            associated_camps.insert(camp);
+        }
+
+        const auto run =
+            g_chest_association_runs.fetch_add(
+                1,
+                std::memory_order_acq_rel
+            ) + 1;
+
+        emit_format(
+            "[ModIntegratedStorageCpp] CHEST_ASSOC "
+            "run=%llu objects=%zu valid=%zu "
+            "associated=%zu unassociated=%zu "
+            "guilds=%zu camps=%zu null=%zu "
+            "missing_function=%zu "
+            "invalid_parameters=%zu invalid_camp=%zu "
+            "missing_guild=%zu zero_guild=%zu",
+            static_cast<unsigned long long>(run),
+            chests.size(),
+            valid_chests,
+            associated_chests,
+            unassociated_chests,
+            guild_chests.size(),
+            associated_camps.size(),
+            null_chests,
+            missing_functions,
+            invalid_parameter_layouts,
+            invalid_camps,
+            missing_guild_properties,
+            zero_guild_keys
+        );
+
+        for (
+            const auto& [guild_key, chest_count]
+                : guild_chests
+        )
+        {
+            const auto hex =
+                guid_to_hex(guild_key);
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_GUILD id=%s chests=%zu",
+                hex.data(),
+                chest_count
+            );
+        }
+
+        const bool complete =
+            base_camp_class != nullptr &&
+            valid_chests > 0 &&
+            valid_chests ==
+                associated_chests +
+                unassociated_chests &&
+            null_chests == 0 &&
+            missing_functions == 0 &&
+            invalid_parameter_layouts == 0 &&
+            invalid_camps == 0 &&
+            missing_guild_properties == 0 &&
+            zero_guild_keys == 0;
+
+        if (complete)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_ASSOC RESULT=PASS"
+            );
+        }
+        else if (chests.empty())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_ASSOC RESULT=EMPTY"
+            );
+        }
+        else
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_ASSOC RESULT=INCOMPLETE"
+            );
+        }
+    }
+
+    auto on_engine_tick(
+        RC::Unreal::Hook::TCallbackIterationData<void>&,
+        RC::Unreal::UEngine*,
+        float,
+        bool
+    ) -> void
+    {
+        EngineTickEntryGuard entry_guard{};
+
+        if (
+            !g_chest_association_enabled.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        if (
+            !g_chest_association_requested.exchange(
+                false,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            return;
+        }
+
+        if (
+            g_chest_association_running.exchange(
+                true,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            g_chest_association_requested.store(
+                true,
+                std::memory_order_release
+            );
+
+            return;
+        }
+
+        AssociationRunningGuard running_guard{};
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_ASSOC THREAD=INVALID"
+            );
+
+            return;
+        }
+
+        try
+        {
+            run_read_only_chest_association();
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "CHEST_ASSOC RESULT=EXCEPTION"
+            );
+        }
+    }
+
     class ModIntegratedStorageCpp final
         : public RC::CppUserModBase
     {
@@ -662,12 +1158,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4a.2");
+                STR("0.1.0-linux-stage4b.2");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only "
-                    "base-camp, guild and storage discovery."
+                    "base-camp, guild, storage and chest association."
                 );
 
             ModAuthors =
@@ -680,6 +1176,68 @@ namespace
 
         ~ModIntegratedStorageCpp() override
         {
+            g_chest_association_enabled.store(
+                false,
+                std::memory_order_release
+            );
+
+            g_chest_association_requested.store(
+                false,
+                std::memory_order_release
+            );
+
+            const auto callback_id =
+                g_engine_tick_callback_id;
+
+            g_engine_tick_callback_id =
+                RC::Unreal::Hook::ERROR_ID;
+
+            if (
+                callback_id !=
+                    RC::Unreal::Hook::ERROR_ID
+            )
+            {
+                const bool removed =
+                    RC::Unreal::Hook::
+                        UnregisterCallback(
+                            callback_id
+                        );
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "ENGINE_TICK unregister=%d",
+                    removed ? 1 : 0
+                );
+            }
+
+            bool quiescent{};
+
+            for (int attempt = 0; attempt < 500; ++attempt)
+            {
+                if (
+                    g_engine_tick_entries.load(
+                        std::memory_order_acquire
+                    ) == 0 &&
+                    !g_chest_association_running.load(
+                        std::memory_order_acquire
+                    )
+                )
+                {
+                    quiescent = true;
+                    break;
+                }
+
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(10)
+                );
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "ENGINE_TICK quiescent=%d",
+                quiescent ? 1 : 0
+            );
+
             emit_marker(
                 "[ModIntegratedStorageCpp] destructor"
             );
@@ -740,6 +1298,38 @@ namespace
                 "[ModIntegratedStorageCpp] "
                 "STAGE4A read-only discovery enabled"
             );
+
+            if (
+                g_engine_tick_callback_id ==
+                    RC::Unreal::Hook::ERROR_ID
+            )
+            {
+                const auto callback_id =
+                    RC::Unreal::Hook::
+                        RegisterEngineTickPreCallback(
+                            &on_engine_tick,
+                            {}
+                        );
+
+                g_engine_tick_callback_id =
+                    callback_id;
+
+                const bool registered =
+                    callback_id !=
+                        RC::Unreal::Hook::ERROR_ID;
+
+                g_chest_association_enabled.store(
+                    registered,
+                    std::memory_order_release
+                );
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "ENGINE_TICK registered=%d",
+                    registered ? 1 : 0
+                );
+            }
+
         }
 
         auto on_update() -> void override
@@ -774,6 +1364,7 @@ namespace
             {
                 g_last_discovery = now;
                 run_read_only_discovery();
+                request_read_only_chest_association();
             }
         }
     };
@@ -783,6 +1374,25 @@ extern "C"
 __attribute__((visibility("default")))
 auto start_mod() -> RC::CppUserModBase*
 {
+    const bool module_pinned =
+        ModIntegratedStorageModulePin::
+            pin_for_process_lifetime();
+
+    std::fprintf(
+        stderr,
+        "[ModIntegratedStorageCpp] "
+        "MODULE_PIN result=%s\n",
+        module_pinned ? "PASS" : "FAIL"
+    );
+
+    std::fflush(stderr);
+
+    if (!module_pinned)
+    {
+        return nullptr;
+    }
+
+
     emit_marker(
         "[ModIntegratedStorageCpp] start_mod export"
     );

@@ -57,8 +57,9 @@ converted copy of the Windows DLL.
 
 ## How NullPrism is used
 
-NullPrism RE-UE4SS provides the connection between the native Linux mod
-and the Unreal Engine runtime inside PalServer.
+[NullPrism RE-UE4SS-Linux](https://github.com/NullPrism/RE-UE4SS-Linux)
+provides the connection between the native Linux mod and the Unreal
+Engine runtime inside PalServer.
 
 The current attachment path is:
 
@@ -107,15 +108,28 @@ The Linux implementation currently uses reflected Unreal access to:
 - Resolve the reflected `PalBaseCampModuleItemStorage` class.
 - Match storage modules through reflected class-pointer ancestry.
 - Group discovered camps and storage modules by their 16-byte guild ID.
-- Emit read-only diagnostic results for validation.
+- Enumerate loaded `PalMapObjectItemChestModel` objects.
+- Schedule chest ownership queries through a native EngineTick callback
+  so reflected `ProcessEvent` calls execute on the Unreal game thread.
+- Resolve each chest's owning camp through
+  `GetBaseCampModelBelongTo`.
+- Associate each resolved chest with its camp and existing guild ID.
+- Emit read-only camp, storage and chest-association diagnostics.
+
+Because NullPrism can release its original native-mod loader handle, the
+mod intentionally retains one additional `dlopen` reference for the
+lifetime of PalServer. This keeps callback code mapped until process
+exit, including while NullPrism invalidates and later collects a
+registered callback.
 
 The current implementation does not:
 
-- Register storage modules.
-- Traverse or register buildable chests.
+- Register storage modules or buildable chests.
+- Add chests to another camp or guild.
 - Redirect inventory requests.
+- Provide shared inventory routing.
 - Alter crafting behaviour.
-- Move or consume items.
+- Move, consume or transfer items.
 - Mutate any storage container.
 - Install client hooks or UI changes.
 
@@ -188,7 +202,8 @@ This repository preserves that attribution while developing the native
 Linux dedicated-server port.
 
 Detailed Stage 4a architecture and validation notes are available in
-`docs/LINUX_STAGE_4A.md`.
+`docs/LINUX_STAGE_4A.md`. Stage 4b.2 extends that read-only foundation
+with validated game-thread chest-to-camp and chest-to-guild association.
 
 <!-- linux-dedicated-port-overview:end -->
 
