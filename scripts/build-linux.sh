@@ -15,7 +15,7 @@ UE4SS_ROOT="${UE4SS_ROOT:-/workspace/RE-UE4SS-Linux}"
 FIXTURE="$UE4SS_ROOT/validation/native/cpp-mod-loading"
 
 BUILD_ROOT="${UE4SS_BUILD_ROOT:-/build/nullprism-linux-v0.1.0-sdk}"
-BUILD_OUTPUT="${BUILD_OUTPUT:-/build/integrated-storage-linux-scaffold}"
+BUILD_OUTPUT="${BUILD_OUTPUT:-/build/integrated-storage-linux}"
 STAGE="${STAGE:-/staging/ModIntegratedStorageCpp}"
 
 SOURCE="$REPO_ROOT/src/linux/main.cpp"
@@ -134,7 +134,7 @@ PY
 chmod 700 "$TEMP_BUILD_SCRIPT"
 rm -f "$ARTIFACT"
 
-echo "=== BUILDING LINUX SCAFFOLD ==="
+echo "=== BUILDING LINUX DEDICATED-SERVER MOD ==="
 
 cd "$UE4SS_ROOT"
 
@@ -209,7 +209,7 @@ ARTIFACT_HASH="$(
 )"
 
 cat > "$STAGE/BUILD-PROVENANCE.txt" <<EOF
-Integrated Storage Linux lifecycle scaffold
+Integrated Storage Linux dedicated-server build
 
 Repository:
 $REPO_ROOT
@@ -232,10 +232,10 @@ $(git -C "$UE4SS_ROOT" describe --tags --always)
 Official loader SHA256:
 $ACTUAL_LOADER_HASH
 
-Scaffold source SHA256:
+Linux source SHA256:
 $SOURCE_HASH
 
-Scaffold main.so SHA256:
+Linux main.so SHA256:
 $ARTIFACT_HASH
 
 Compiler:
@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Lifecycle and read-only Unreal API validation only.
-No Integrated Storage pooling behaviour is enabled.
+Stage 4a read-only base-camp, guild and storage discovery.
+No chest traversal, cross-registration, transport or container mutation is enabled.
 EOF
 
 echo
@@ -261,4 +261,4 @@ echo
 cat "$STAGE/BUILD-PROVENANCE.txt"
 
 echo
-echo "PASS: Integrated Storage Linux scaffold built and staged."
+echo "PASS: Integrated Storage Linux dedicated-server mod built and staged."
