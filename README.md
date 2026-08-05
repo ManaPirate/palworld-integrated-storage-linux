@@ -1,4 +1,14 @@
-# IntegratedStorage for Palworld
+# Integrated Storage for Palworld — Linux / NullPrism Port
+
+<!-- linux-nullprism-port-notice -->
+> [!IMPORTANT]
+> This fork is focused on adding native Linux dedicated-server
+> support through NullPrism's RE-UE4SS-Linux.
+>
+> The original Integrated Storage project is maintained by
+> [Sarfflow](https://github.com/Sarfflow/palworld-integrated-storage).
+> Windows clients continue to use the upstream Windows client build.
+
 
 **Author: Sarfflow** · Palworld 1.0 · a [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) C++ mod
 
