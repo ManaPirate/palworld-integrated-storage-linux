@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.3 adds a default-disabled, adjacent-arm-file-gated, process-lifetime one-shot registration call for one validated same-guild foreign-camp pair.
-The normal staged package is unarmed. Registration occurs only when dlls/main.so.stage4c3-arm exists beside main.so; full reconciliation, routing and item transfer remain disabled.
+Stage 4c.4c adds a read-only item-storage-model linkage survey for the selected chest, item container and guild storage.
+The normal staged package remains unarmed. The survey adds no ProcessEvent call and does not perform registration, removal, reconciliation, routing or item transfer.
 EOF
 
 echo

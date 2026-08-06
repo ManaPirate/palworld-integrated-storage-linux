@@ -609,6 +609,9 @@ namespace
     std::atomic_bool g_single_registration_gate_reported{false};
     std::atomic_bool g_single_registration_blocked_reported{false};
 
+    std::atomic_bool g_observability_metadata_reported{false};
+    std::atomic_bool g_item_storage_linkage_reported{false};
+
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
 
@@ -1358,6 +1361,1322 @@ namespace
         };
     }
 
+
+
+    struct ObservabilityMetadataCounters
+    {
+        std::uint64_t properties_found{};
+        std::uint64_t functions_found{};
+        std::uint64_t property_exceptions{};
+        std::uint64_t function_exceptions{};
+    };
+
+    auto emit_observability_property_metadata(
+        RC::Unreal::UObject* object,
+        const char* object_label,
+        const RC::Unreal::TCHAR* candidate_name,
+        const char* candidate_label,
+        ObservabilityMetadataCounters& counters
+    ) noexcept -> void
+    {
+        if (object == nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_PROPERTY object=%s candidate=%s "
+                "exists=0 reason=null_object",
+                object_label,
+                candidate_label
+            );
+
+            return;
+        }
+
+        try
+        {
+            auto* property =
+                object->GetPropertyByNameInChain(
+                    candidate_name
+                );
+
+            if (property == nullptr)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "OBS_PROPERTY object=%s candidate=%s "
+                    "exists=0",
+                    object_label,
+                    candidate_label
+                );
+
+                return;
+            }
+
+            ++counters.properties_found;
+
+            auto* object_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FObjectPropertyBase
+                >(property);
+
+            auto* weak_object_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FWeakObjectProperty
+                >(property);
+
+            auto* array_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FArrayProperty
+                >(property);
+
+            auto* set_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FSetProperty
+                >(property);
+
+            auto* map_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FMapProperty
+                >(property);
+
+            auto* struct_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FStructProperty
+                >(property);
+
+            const char* kind = "other";
+
+            if (object_property != nullptr)
+            {
+                kind = "object";
+            }
+            else if (weak_object_property != nullptr)
+            {
+                kind = "weak_object";
+            }
+            else if (array_property != nullptr)
+            {
+                kind = "array";
+            }
+            else if (set_property != nullptr)
+            {
+                kind = "set";
+            }
+            else if (map_property != nullptr)
+            {
+                kind = "map";
+            }
+            else if (struct_property != nullptr)
+            {
+                kind = "struct";
+            }
+
+            bool accepted_class{};
+
+            if (object_property != nullptr)
+            {
+                accepted_class =
+                    object_property->GetPropertyClass() !=
+                    nullptr;
+            }
+
+            bool inner_object{};
+
+            if (array_property != nullptr)
+            {
+                auto* inner =
+                    array_property->GetInner();
+
+                inner_object =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(inner) != nullptr ||
+                    RC::Unreal::CastField<
+                        RC::Unreal::FWeakObjectProperty
+                    >(inner) != nullptr;
+            }
+
+            bool set_element_object{};
+
+            if (set_property != nullptr)
+            {
+                auto* element =
+                    set_property->GetElementProp();
+
+                set_element_object =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(element) != nullptr ||
+                    RC::Unreal::CastField<
+                        RC::Unreal::FWeakObjectProperty
+                    >(element) != nullptr;
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_PROPERTY object=%s candidate=%s "
+                "exists=1 kind=%s offset=%d size=%d "
+                "element_size=%d accepted_class=%d "
+                "inner_object=%d set_element_object=%d",
+                object_label,
+                candidate_label,
+                kind,
+                property->GetOffset_Internal(),
+                property->GetSize(),
+                property->GetElementSize(),
+                accepted_class ? 1 : 0,
+                inner_object ? 1 : 0,
+                set_element_object ? 1 : 0
+            );
+        }
+        catch (...)
+        {
+            ++counters.property_exceptions;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_PROPERTY object=%s candidate=%s "
+                "exists=0 reason=exception",
+                object_label,
+                candidate_label
+            );
+        }
+    }
+
+    auto emit_observability_function_metadata(
+        RC::Unreal::UObject* object,
+        const char* object_label,
+        const RC::Unreal::TCHAR* candidate_name,
+        const char* candidate_label,
+        ObservabilityMetadataCounters& counters
+    ) noexcept -> void
+    {
+        if (object == nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_FUNCTION object=%s candidate=%s "
+                "exists=0 reason=null_object",
+                object_label,
+                candidate_label
+            );
+
+            return;
+        }
+
+        try
+        {
+            auto* function =
+                object->GetFunctionByNameInChain(
+                    candidate_name
+                );
+
+            if (function == nullptr)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "OBS_FUNCTION object=%s candidate=%s "
+                    "exists=0",
+                    object_label,
+                    candidate_label
+                );
+
+                return;
+            }
+
+            ++counters.functions_found;
+
+            std::uint64_t inputs{};
+            std::uint64_t returns{};
+            std::uint64_t object_inputs{};
+            std::uint64_t object_returns{};
+            std::uint64_t array_inputs{};
+            std::uint64_t array_returns{};
+            std::uint64_t set_inputs{};
+            std::uint64_t set_returns{};
+            std::uint64_t map_inputs{};
+            std::uint64_t map_returns{};
+
+            for (
+                auto* property :
+                function->ForEachProperty()
+            )
+            {
+                if (
+                    property == nullptr ||
+                    !property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_Parm
+                    )
+                )
+                {
+                    continue;
+                }
+
+                const bool is_return =
+                    property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_ReturnParm
+                    );
+
+                if (is_return)
+                {
+                    ++returns;
+                }
+                else
+                {
+                    ++inputs;
+                }
+
+                const bool is_object =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(property) != nullptr ||
+                    RC::Unreal::CastField<
+                        RC::Unreal::FWeakObjectProperty
+                    >(property) != nullptr;
+
+                const bool is_array =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(property) != nullptr;
+
+                const bool is_set =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FSetProperty
+                    >(property) != nullptr;
+
+                const bool is_map =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FMapProperty
+                    >(property) != nullptr;
+
+                if (is_return)
+                {
+                    object_returns +=
+                        is_object ? 1U : 0U;
+
+                    array_returns +=
+                        is_array ? 1U : 0U;
+
+                    set_returns +=
+                        is_set ? 1U : 0U;
+
+                    map_returns +=
+                        is_map ? 1U : 0U;
+                }
+                else
+                {
+                    object_inputs +=
+                        is_object ? 1U : 0U;
+
+                    array_inputs +=
+                        is_array ? 1U : 0U;
+
+                    set_inputs +=
+                        is_set ? 1U : 0U;
+
+                    map_inputs +=
+                        is_map ? 1U : 0U;
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_FUNCTION object=%s candidate=%s "
+                "exists=1 parms=%zu inputs=%llu "
+                "returns=%llu object_inputs=%llu "
+                "object_returns=%llu array_inputs=%llu "
+                "array_returns=%llu set_inputs=%llu "
+                "set_returns=%llu map_inputs=%llu "
+                "map_returns=%llu",
+                object_label,
+                candidate_label,
+                function->GetParmsSize(),
+                static_cast<unsigned long long>(
+                    inputs
+                ),
+                static_cast<unsigned long long>(
+                    returns
+                ),
+                static_cast<unsigned long long>(
+                    object_inputs
+                ),
+                static_cast<unsigned long long>(
+                    object_returns
+                ),
+                static_cast<unsigned long long>(
+                    array_inputs
+                ),
+                static_cast<unsigned long long>(
+                    array_returns
+                ),
+                static_cast<unsigned long long>(
+                    set_inputs
+                ),
+                static_cast<unsigned long long>(
+                    set_returns
+                ),
+                static_cast<unsigned long long>(
+                    map_inputs
+                ),
+                static_cast<unsigned long long>(
+                    map_returns
+                )
+            );
+        }
+        catch (...)
+        {
+            ++counters.function_exceptions;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_FUNCTION object=%s candidate=%s "
+                "exists=0 reason=exception",
+                object_label,
+                candidate_label
+            );
+        }
+    }
+
+    auto run_read_only_observability_metadata_probe(
+        RC::Unreal::UObject* chest,
+        RC::Unreal::UObject* target_storage,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (
+            !plan_complete ||
+            chest == nullptr ||
+            target_storage == nullptr
+        )
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_observability_metadata_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        ObservabilityMetadataCounters counters{};
+
+        try
+        {
+            static auto* guild_storages =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            guild_storages->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            RC::Unreal::UObject* guild_storage{};
+
+            for (auto* candidate : *guild_storages)
+            {
+                if (candidate != nullptr)
+                {
+                    guild_storage = candidate;
+                    break;
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_META guild_storage_objects=%zu "
+                "guild_storage_candidate=%d",
+                guild_storages->size(),
+                guild_storage != nullptr ? 1 : 0
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("GuildItemStorage"),
+                "GuildItemStorage",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("ItemContainer"),
+                "ItemContainer",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("ItemStorage"),
+                "ItemStorage",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("ConcreteModel"),
+                "ConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("CachedConcreteModel"),
+                "CachedConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                target_storage,
+                "storage",
+                STR("OwnerConcreteModel"),
+                "OwnerConcreteModel",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                target_storage,
+                "storage",
+                STR(
+                    "OnAvailableConcreteModel_"
+                    "ServerInternal"
+                ),
+                "OnAvailableConcreteModel_ServerInternal",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                target_storage,
+                "storage",
+                STR(
+                    "OnNotAvailableConcreteModel_"
+                    "ServerInternal"
+                ),
+                "OnNotAvailableConcreteModel_ServerInternal",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                target_storage,
+                "storage",
+                STR(
+                    "OnUpdateItemContainerIn"
+                    "GuildItemStorage"
+                ),
+                "OnUpdateItemContainerInGuildItemStorage",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                target_storage,
+                "storage",
+                STR("GetItemContainer"),
+                "GetItemContainer",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                target_storage,
+                "storage",
+                STR(
+                    "GetItemContainer_"
+                    "ItemContainerAccessInterface"
+                ),
+                "GetItemContainer_ItemContainerAccessInterface",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                chest,
+                "chest",
+                STR("ConcreteModel"),
+                "ConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                chest,
+                "chest",
+                STR("CachedConcreteModel"),
+                "CachedConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                chest,
+                "chest",
+                STR("OwnerConcreteModel"),
+                "OwnerConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                chest,
+                "chest",
+                STR("ItemContainer"),
+                "ItemContainer",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                chest,
+                "chest",
+                STR("GuildItemStorage"),
+                "GuildItemStorage",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                chest,
+                "chest",
+                STR("GetItemContainer"),
+                "GetItemContainer",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                chest,
+                "chest",
+                STR(
+                    "GetItemContainer_"
+                    "ItemContainerAccessInterface"
+                ),
+                "GetItemContainer_ItemContainerAccessInterface",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                chest,
+                "chest",
+                STR("GetConcreteModel"),
+                "GetConcreteModel",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                chest,
+                "chest",
+                STR("GetOwnerMapObjectConcreteModel"),
+                "GetOwnerMapObjectConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ItemContainer"),
+                "ItemContainer",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ItemContainers"),
+                "ItemContainers",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ItemContainerArray"),
+                "ItemContainerArray",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ContainerArray"),
+                "ContainerArray",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ConcreteModel"),
+                "ConcreteModel",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ConcreteModels"),
+                "ConcreteModels",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("RegisteredConcreteModels"),
+                "RegisteredConcreteModels",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("GroupId"),
+                "GroupId",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("GroupIdBelongTo"),
+                "GroupIdBelongTo",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("GuildId"),
+                "GuildId",
+                counters
+            );
+
+            emit_observability_property_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("GuildID"),
+                "GuildID",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("GetItemContainer"),
+                "GetItemContainer",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("FindItemContainer"),
+                "FindItemContainer",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("TryGetItemContainer"),
+                "TryGetItemContainer",
+                counters
+            );
+
+            emit_observability_function_metadata(
+                guild_storage,
+                "guild_storage",
+                STR("ContainsItemContainer"),
+                "ContainsItemContainer",
+                counters
+            );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "OBS_META properties_found=%llu "
+                "functions_found=%llu "
+                "property_exceptions=%llu "
+                "function_exceptions=%llu",
+                static_cast<unsigned long long>(
+                    counters.properties_found
+                ),
+                static_cast<unsigned long long>(
+                    counters.functions_found
+                ),
+                static_cast<unsigned long long>(
+                    counters.property_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    counters.function_exceptions
+                )
+            );
+
+            if (
+                counters.property_exceptions == 0 &&
+                counters.function_exceptions == 0
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "OBS_META RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "OBS_META RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "OBS_META RESULT=EXCEPTION"
+            );
+        }
+    }
+
+
+    struct ReadObjectPropertyResult
+    {
+        bool exists{};
+        bool object_property{};
+        RC::Unreal::UObject* value{};
+        std::int32_t offset{};
+        std::int32_t size{};
+    };
+
+    auto read_object_property_candidate(
+        RC::Unreal::UObject* object,
+        const RC::Unreal::TCHAR* candidate_name
+    ) noexcept -> ReadObjectPropertyResult
+    {
+        ReadObjectPropertyResult result{};
+
+        if (object == nullptr)
+        {
+            return result;
+        }
+
+        try
+        {
+            auto* property =
+                object->GetPropertyByNameInChain(
+                    candidate_name
+                );
+
+            if (property == nullptr)
+            {
+                return result;
+            }
+
+            result.exists = true;
+            result.offset =
+                property->GetOffset_Internal();
+            result.size =
+                property->GetSize();
+
+            auto* object_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FObjectPropertyBase
+                >(property);
+
+            if (object_property == nullptr)
+            {
+                return result;
+            }
+
+            result.object_property = true;
+
+            auto* address =
+                property->ContainerPtrToValuePtr<
+                    void
+                >(object);
+
+            if (address == nullptr)
+            {
+                return result;
+            }
+
+            result.value =
+                object_property->
+                    GetObjectPropertyValue(
+                        address
+                    );
+
+            return result;
+        }
+        catch (...)
+        {
+            return result;
+        }
+    }
+
+    auto object_pointer_in_vector(
+        RC::Unreal::UObject* value,
+        const std::vector<
+            RC::Unreal::UObject*
+        >& values
+    ) noexcept -> bool
+    {
+        if (value == nullptr)
+        {
+            return false;
+        }
+
+        for (auto* candidate : values)
+        {
+            if (candidate == value)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    auto run_read_only_item_storage_linkage_probe(
+        RC::Unreal::UObject* chest,
+        RC::Unreal::UObject* target_storage,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (
+            !plan_complete ||
+            chest == nullptr ||
+            target_storage == nullptr
+        )
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_item_storage_linkage_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            static auto* item_storage_models =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            static auto* guild_storages =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            static auto* guild_item_containers =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            item_storage_models->clear();
+            guild_storages->clear();
+            guild_item_containers->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalMapObjectItemStorageModel"),
+                *item_storage_models
+            );
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            std::uint64_t guild_storage_valid{};
+            std::uint64_t guild_item_container_properties{};
+            std::uint64_t guild_item_container_nonnull{};
+
+            for (auto* guild_storage : *guild_storages)
+            {
+                if (guild_storage == nullptr)
+                {
+                    continue;
+                }
+
+                ++guild_storage_valid;
+
+                const auto item_container =
+                    read_object_property_candidate(
+                        guild_storage,
+                        STR("ItemContainer")
+                    );
+
+                if (
+                    item_container.exists &&
+                    item_container.object_property
+                )
+                {
+                    ++guild_item_container_properties;
+
+                    if (item_container.value != nullptr)
+                    {
+                        ++guild_item_container_nonnull;
+
+                        if (
+                            !object_pointer_in_vector(
+                                item_container.value,
+                                *guild_item_containers
+                            )
+                        )
+                        {
+                            guild_item_containers->
+                                push_back(
+                                    item_container.value
+                                );
+                        }
+                    }
+                }
+            }
+
+            std::uint64_t valid_models{};
+            std::uint64_t direct_matches{};
+            std::uint64_t linked_models{};
+            std::uint64_t conflicting_links{};
+            std::uint64_t item_container_properties{};
+            std::uint64_t item_container_nonnull{};
+            std::uint64_t guild_storage_properties{};
+            std::uint64_t guild_storage_nonnull{};
+
+            RC::Unreal::UObject* linked_model{};
+            RC::Unreal::UObject* linked_item_container{};
+            RC::Unreal::UObject* linked_guild_storage{};
+
+            const RC::Unreal::TCHAR*
+                owner_candidate_names[] = {
+                    STR("OwnerConcreteModel"),
+                    STR("ConcreteModel"),
+                    STR("CachedConcreteModel"),
+                    STR("MapObjectConcreteModel"),
+                    STR("OwnerMapObjectConcreteModel"),
+                    STR("OwnerMapObject")
+                };
+
+            for (auto* model : *item_storage_models)
+            {
+                if (model == nullptr)
+                {
+                    continue;
+                }
+
+                ++valid_models;
+
+                if (model == chest)
+                {
+                    ++direct_matches;
+                }
+
+                bool matches_selected_chest{};
+
+                for (
+                    const auto* candidate_name :
+                    owner_candidate_names
+                )
+                {
+                    const auto owner =
+                        read_object_property_candidate(
+                            model,
+                            candidate_name
+                        );
+
+                    if (
+                        owner.exists &&
+                        owner.object_property &&
+                        owner.value == chest
+                    )
+                    {
+                        matches_selected_chest = true;
+                    }
+                }
+
+                const auto item_container =
+                    read_object_property_candidate(
+                        model,
+                        STR("ItemContainer")
+                    );
+
+                if (
+                    item_container.exists &&
+                    item_container.object_property
+                )
+                {
+                    ++item_container_properties;
+
+                    if (item_container.value != nullptr)
+                    {
+                        ++item_container_nonnull;
+                    }
+                }
+
+                const auto guild_storage =
+                    read_object_property_candidate(
+                        model,
+                        STR("GuildItemStorage")
+                    );
+
+                if (
+                    guild_storage.exists &&
+                    guild_storage.object_property
+                )
+                {
+                    ++guild_storage_properties;
+
+                    if (guild_storage.value != nullptr)
+                    {
+                        ++guild_storage_nonnull;
+                    }
+                }
+
+                if (!matches_selected_chest)
+                {
+                    continue;
+                }
+
+                ++linked_models;
+
+                if (linked_model == nullptr)
+                {
+                    linked_model = model;
+                    linked_item_container =
+                        item_container.value;
+                    linked_guild_storage =
+                        guild_storage.value;
+                }
+                else if (linked_model != model)
+                {
+                    ++conflicting_links;
+                }
+            }
+
+            RC::Unreal::UObject* first_model{};
+
+            for (auto* candidate : *item_storage_models)
+            {
+                if (candidate != nullptr)
+                {
+                    first_model = candidate;
+                    break;
+                }
+            }
+
+            ObservabilityMetadataCounters
+                metadata_counters{};
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("ItemContainer"),
+                "ItemContainer",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("GuildItemStorage"),
+                "GuildItemStorage",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("OwnerConcreteModel"),
+                "OwnerConcreteModel",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("ConcreteModel"),
+                "ConcreteModel",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("CachedConcreteModel"),
+                "CachedConcreteModel",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("MapObjectConcreteModel"),
+                "MapObjectConcreteModel",
+                metadata_counters
+            );
+
+            emit_observability_property_metadata(
+                first_model,
+                "item_storage_model",
+                STR("OwnerMapObjectConcreteModel"),
+                "OwnerMapObjectConcreteModel",
+                metadata_counters
+            );
+
+            emit_observability_function_metadata(
+                first_model,
+                "item_storage_model",
+                STR("GetItemContainer"),
+                "GetItemContainer",
+                metadata_counters
+            );
+
+            emit_observability_function_metadata(
+                first_model,
+                "item_storage_model",
+                STR(
+                    "GetItemContainer_"
+                    "ItemContainerAccessInterface"
+                ),
+                "GetItemContainer_ItemContainerAccessInterface",
+                metadata_counters
+            );
+
+            emit_observability_function_metadata(
+                first_model,
+                "item_storage_model",
+                STR(
+                    "OnUpdateItemContainerIn"
+                    "GuildItemStorage"
+                ),
+                "OnUpdateItemContainerInGuildItemStorage",
+                metadata_counters
+            );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "ITEM_LINK models=%zu valid=%llu "
+                "direct_matches=%llu linked_models=%llu "
+                "conflicting_links=%llu "
+                "item_container_properties=%llu "
+                "item_container_nonnull=%llu "
+                "guild_storage_properties=%llu "
+                "guild_storage_nonnull=%llu "
+                "guild_storage_objects=%zu "
+                "guild_storage_valid=%llu "
+                "guild_item_container_properties=%llu "
+                "guild_item_container_nonnull=%llu "
+                "distinct_guild_item_containers=%zu "
+                "linked_model=%d linked_item_container=%d "
+                "linked_guild_storage=%d "
+                "linked_guild_object_match=%d "
+                "linked_container_matches_guild_container=%d "
+                "metadata_property_exceptions=%llu "
+                "metadata_function_exceptions=%llu",
+                item_storage_models->size(),
+                static_cast<unsigned long long>(
+                    valid_models
+                ),
+                static_cast<unsigned long long>(
+                    direct_matches
+                ),
+                static_cast<unsigned long long>(
+                    linked_models
+                ),
+                static_cast<unsigned long long>(
+                    conflicting_links
+                ),
+                static_cast<unsigned long long>(
+                    item_container_properties
+                ),
+                static_cast<unsigned long long>(
+                    item_container_nonnull
+                ),
+                static_cast<unsigned long long>(
+                    guild_storage_properties
+                ),
+                static_cast<unsigned long long>(
+                    guild_storage_nonnull
+                ),
+                guild_storages->size(),
+                static_cast<unsigned long long>(
+                    guild_storage_valid
+                ),
+                static_cast<unsigned long long>(
+                    guild_item_container_properties
+                ),
+                static_cast<unsigned long long>(
+                    guild_item_container_nonnull
+                ),
+                guild_item_containers->size(),
+                linked_model != nullptr ? 1 : 0,
+                linked_item_container != nullptr ? 1 : 0,
+                linked_guild_storage != nullptr ? 1 : 0,
+                object_pointer_in_vector(
+                    linked_guild_storage,
+                    *guild_storages
+                ) ? 1 : 0,
+                object_pointer_in_vector(
+                    linked_item_container,
+                    *guild_item_containers
+                ) ? 1 : 0,
+                static_cast<unsigned long long>(
+                    metadata_counters.
+                        property_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    metadata_counters.
+                        function_exceptions
+                )
+            );
+
+            if (
+                conflicting_links == 0 &&
+                metadata_counters.
+                    property_exceptions == 0 &&
+                metadata_counters.
+                    function_exceptions == 0
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ITEM_LINK RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ITEM_LINK RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "ITEM_LINK RESULT=EXCEPTION"
+            );
+        }
+    }
 
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
@@ -2219,6 +3538,18 @@ namespace
                 registration_probe_target_storage
             );
 
+        run_read_only_observability_metadata_probe(
+            registration_probe_chest,
+            registration_probe_target_storage,
+            plan_complete
+        );
+
+        run_read_only_item_storage_linkage_probe(
+            registration_probe_chest,
+            registration_probe_target_storage,
+            plan_complete
+        );
+
         run_controlled_single_registration(
             registration_probe_chest,
             registration_probe_chest_camp,
@@ -2431,12 +3762,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.3-single-registration");
+                STR("0.1.0-linux-stage4c.4c-item-storage-linkage");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server guarded one-shot "
-                    "registration candidate with deterministic planning."
+                    "Linux dedicated-server read-only item-storage "
+                    "linkage probe with guarded one-shot registration."
                 );
 
             ModAuthors =

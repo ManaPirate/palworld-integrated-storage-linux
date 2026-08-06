@@ -1849,7 +1849,234 @@ Stage 4c.3 armed:
 
 ---
 
-## 15. Immediate next action
+## 15. Stage 4c.4a — class-specific observability survey
+
+### Goal
+
+Narrow the registration-effect search to the actual item-storage and
+guild-storage classes.
+
+### Result
+
+The PalServer binary contained no usable full symbol table:
+
+```text
+nm lines:      0
+mangled names: 46505
+```
+
+Only vtable names surfaced for:
+
+```text
+UPalBaseCampModuleItemStorage
+UPalGuildItemStorage
+UPalMapObjectItemStorageModel
+UPalMapObjectConcreteModelModuleItemHolderInterface
+```
+
+Direct symbol-based disassembly of the registration handlers was
+therefore unavailable.
+
+Relevant PalServer strings included:
+
+```text
+CachedConcreteModel
+ConcreteModel
+GetItemContainer
+GetItemContainer_ItemContainerAccessInterface
+GuildItemStorage
+ItemContainer
+OnUpdateItemContainerInGuildItemStorage
+OwnerConcreteModel
+```
+
+The survey made no source, build, runtime, save, or production change.
+
+---
+
+## 16. Stage 4c.4b — runtime reflection metadata
+
+### Goal
+
+Probe known candidate properties and function signatures on the selected
+camp storage module, selected chest model, and a discovered
+`UPalGuildItemStorage`.
+
+No function was invoked.
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4c.4b-observability-metadata
+
+Source SHA256:
+feaf429efa135c08abb9b4cd3fc814c777836dbea85df89720250ae99803e264
+
+Artifact SHA256:
+4176728c6403170f47e5a8f6a02db60ae8d14dc0ea8164e8380999283f1405a6
+
+Build ID:
+3a780fd2c9035654207fb076b027159b5dff05ee
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4b-metadata-20260806-110734
+```
+
+Results:
+
+```text
+UPalGuildItemStorage objects: 9
+OBS_META PASS:                1
+OBS_META INCOMPLETE:          0
+OBS_META EXCEPTION:           0
+Registration called:          0
+Gate disabled:                1
+Invalid thread:               0
+Crash markers:                0
+```
+
+The selected camp storage module exposed both:
+
+```text
+OnAvailableConcreteModel_ServerInternal
+OnNotAvailableConcreteModel_ServerInternal
+```
+
+Each has:
+
+```text
+Parameter bytes: 8
+Inputs:          1 UObject
+Returns:         0
+```
+
+This confirms a reflected paired removal path exists. Earlier statements
+that no removal function had surfaced are superseded by this result.
+
+A `UPalGuildItemStorage` object exposed:
+
+```text
+Property:
+ItemContainer
+
+Kind:
+object
+
+Offset:
+72
+
+Size:
+8
+```
+
+The selected camp storage and chest did not expose direct properties
+named `GuildItemStorage`, `ItemContainer`, `ConcreteModel`,
+`CachedConcreteModel`, or `OwnerConcreteModel`.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 17. Stage 4c.4c — item-storage linkage probe
+
+### Goal
+
+Determine whether `UPalMapObjectItemStorageModel` is a separate bridge
+between the selected chest and guild storage.
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4c.4c-item-storage-linkage
+
+Source SHA256:
+fba351d81e32d0f9e23686335e67c22fdae1b3856ca5968204c1569cd106091d
+
+Artifact SHA256:
+294d500030e60b19493f62c9543dffb3495e73b1324880d878085aa3cd8cbcdd
+
+Build ID:
+9fd2d6ad35094c7598f9a426dbaa59f7a03e0c6d
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4c-linkage-20260806-111750
+```
+
+Results:
+
+```text
+Item-storage models:              157
+Valid item-storage models:        157
+Selected chest direct matches:    1
+Separate linked models:           0
+Conflicting links:                0
+Guild-storage objects:            9
+Valid guild-storage objects:      9
+Guild ItemContainer properties:   9
+Non-null guild ItemContainers:    9
+Distinct guild ItemContainers:    9
+Registration called:              0
+Invalid thread:                   0
+Crash markers:                    0
+```
+
+The selected chest itself is already a
+`UPalMapObjectItemStorageModel`. There is no separate item-storage-model
+bridge object.
+
+The tested property and function names did not expose a direct
+`ItemContainer` or `GuildItemStorage` link on the chest model.
+
+### Accepted conclusion
+
+The current observable path is:
+
+```text
+selected chest
+    -> owning camp
+    -> guild identifier
+    -> matching UPalGuildItemStorage
+    -> UPalGuildItemStorage.ItemContainer
+```
+
+The next task is to map each guild-storage object to its owning guild,
+most likely through its UObject outer chain, and inspect the matched
+guild `ItemContainer` for readable child-container or slot metadata.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 18. Immediate next action
+
+Run Stage 4c.4d:
+
+```text
+guild-storage ownership and aggregate ItemContainer survey
+```
+
+Required work:
+
+1. Confirm the exact UObject outer-chain API.
+2. Identify likely group or guild identifier property names.
+3. Identify reflected collection and query names on the aggregate item
+   container.
+4. Keep registration disabled.
+5. Do not add a second registration call or full-plan mutation.
 
 Run the Stage 4c.4 inspection-only observability survey.
 
