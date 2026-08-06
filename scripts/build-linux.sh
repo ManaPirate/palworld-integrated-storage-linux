@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4b.2 process-lifetime module pin and read-only game-thread chest-to-camp and chest-to-guild association.
-No raw chest-map traversal, cross-registration, transport, item routing or container mutation is enabled.
+Stage 4c.1e game-thread dedicated-server role validation with atomic cross-thread role state.
+Discovery and chest association remain read-only; registration, routing and container mutation are disabled.
 EOF
 
 echo

@@ -133,8 +133,8 @@ namespace
     RC::Unreal::UObject* g_pal_utility{};
     RC::Unreal::UObject* g_last_world{};
 
-    int g_is_server{-1};
-    int g_is_dedicated{-1};
+    std::atomic_int g_is_server{-1};
+    std::atomic_int g_is_dedicated{-1};
 
     Clock::time_point g_last_world_probe{};
     Clock::time_point g_last_discovery{};
@@ -401,6 +401,7 @@ namespace
         return parameters.ReturnValue ? 1 : 0;
     }
 
+    std::atomic_bool g_role_probe_requested{false};
     std::atomic_bool g_chest_association_requested{false};
     std::atomic_bool g_chest_association_running{false};
     std::atomic_bool g_chest_association_enabled{false};
@@ -465,8 +466,20 @@ namespace
 
     auto reset_world_state() noexcept -> void
     {
-        g_is_server = -1;
-        g_is_dedicated = -1;
+        g_is_server.store(
+            -1,
+            std::memory_order_release
+        );
+
+        g_is_dedicated.store(
+            -1,
+            std::memory_order_release
+        );
+
+        g_role_probe_requested.store(
+            false,
+            std::memory_order_release
+        );
 
         g_last_discovery = Clock::time_point{};
         g_discovery_runs = 0;
@@ -523,9 +536,14 @@ namespace
         RC::Unreal::UObject* context
     ) -> bool
     {
-        if (g_is_dedicated >= 0)
+        const int cached_dedicated =
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            );
+
+        if (cached_dedicated >= 0)
         {
-            return g_is_dedicated == 1;
+            return cached_dedicated == 1;
         }
 
         const int dedicated_result =
@@ -545,18 +563,26 @@ namespace
                 context
             );
 
-        g_is_dedicated = dedicated_result;
-        g_is_server = server_result;
-
-        emit_format(
-            "[ModIntegratedStorageCpp] ROLE server=%d dedicated=%d",
-            g_is_server,
-            g_is_dedicated
+        g_is_dedicated.store(
+            dedicated_result,
+            std::memory_order_release
         );
 
-        if (g_is_dedicated == 1)
+        g_is_server.store(
+            server_result,
+            std::memory_order_release
+        );
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "ROLE server=%d dedicated=%d",
+            server_result,
+            dedicated_result
+        );
+
+        if (dedicated_result == 1)
         {
-            if (g_is_server != 1)
+            if (server_result != 1)
             {
                 emit_marker(
                     "[ModIntegratedStorageCpp] "
@@ -566,14 +592,16 @@ namespace
             }
 
             emit_marker(
-                "[ModIntegratedStorageCpp] ROLE RESULT=PASS"
+                "[ModIntegratedStorageCpp] "
+                "ROLE RESULT=PASS"
             );
 
             return true;
         }
 
         emit_marker(
-            "[ModIntegratedStorageCpp] ROLE RESULT=NOT_DEDICATED"
+            "[ModIntegratedStorageCpp] "
+            "ROLE RESULT=NOT_DEDICATED"
         );
 
         return false;
@@ -656,6 +684,50 @@ namespace
         }
 
         return find_discovery_context();
+    }
+
+
+    auto get_role_probe_camp_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        // Dedicated process-lifetime buffer prevents concurrent use of
+        // the worker-thread discovery vector and avoids cross-DSO release.
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
+    auto find_game_thread_role_context()
+        -> RC::Unreal::UObject*
+    {
+        auto* player_character =
+            RC::Unreal::UObjectGlobals::FindFirstOf(
+                STR("PalPlayerCharacter")
+            );
+
+        if (player_character != nullptr)
+        {
+            return player_character;
+        }
+
+        auto& camps = get_role_probe_camp_buffer();
+        camps.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalBaseCampModel"),
+            camps
+        );
+
+        for (auto* camp : camps)
+        {
+            if (camp != nullptr)
+            {
+                return camp;
+            }
+        }
+
+        return nullptr;
     }
 
     auto run_read_only_discovery() -> void
@@ -1098,6 +1170,58 @@ namespace
             return;
         }
 
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "ENGINE_TICK THREAD=INVALID"
+            );
+
+            return;
+        }
+
+        if (
+            g_role_probe_requested.exchange(
+                false,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            try
+            {
+                auto* context =
+                    find_game_thread_role_context();
+
+                if (context == nullptr)
+                {
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "ROLE RESULT=NO_CONTEXT"
+                    );
+                }
+                else
+                {
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "ROLE THREAD=GAME"
+                    );
+
+                    static_cast<void>(
+                        resolve_dedicated_role(
+                            context
+                        )
+                    );
+                }
+            }
+            catch (...)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ROLE RESULT=EXCEPTION"
+                );
+            }
+        }
+
         if (
             !g_chest_association_requested.exchange(
                 false,
@@ -1125,16 +1249,6 @@ namespace
 
         AssociationRunningGuard running_guard{};
 
-        if (!RC::Unreal::IsInGameThreadRaw())
-        {
-            emit_marker(
-                "[ModIntegratedStorageCpp] "
-                "CHEST_ASSOC THREAD=INVALID"
-            );
-
-            return;
-        }
-
         try
         {
             run_read_only_chest_association();
@@ -1158,12 +1272,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4b.2");
+                STR("0.1.0-linux-stage4c.1e-role-thread");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only "
-                    "base-camp, guild, storage and chest association."
+                    "game-thread dedicated-role validation and read-only discovery."
                 );
 
             ModAuthors =
@@ -1177,6 +1291,11 @@ namespace
         ~ModIntegratedStorageCpp() override
         {
             g_chest_association_enabled.store(
+                false,
+                std::memory_order_release
+            );
+
+            g_role_probe_requested.store(
                 false,
                 std::memory_order_release
             );
@@ -1345,14 +1464,26 @@ namespace
 
                 auto* context = find_role_context();
 
-                if (context != nullptr)
+                if (
+                    context != nullptr &&
+                    observe_world(context) &&
+                    g_is_dedicated.load(
+                        std::memory_order_acquire
+                    ) < 0
+                )
                 {
-                    observe_world(context);
-                    resolve_dedicated_role(context);
+                    g_role_probe_requested.store(
+                        true,
+                        std::memory_order_release
+                    );
                 }
             }
 
-            if (g_is_dedicated != 1)
+            if (
+                g_is_dedicated.load(
+                    std::memory_order_acquire
+                ) != 1
+            )
             {
                 return;
             }
