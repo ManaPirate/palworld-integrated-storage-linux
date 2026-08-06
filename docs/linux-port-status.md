@@ -1,38 +1,336 @@
-# Linux Dedicated-Server Port Overview
+# Linux Port Engineering Runsheet
 
-## Purpose
+This document is the detailed, chronological engineering record for the
+native Linux dedicated-server port of Palworld Integrated Storage.
 
-This repository ports Integrated Storage to a native Linux Palworld
-dedicated server.
+It records:
 
-The goal is to reproduce the server-side behaviour of the original
-Windows client/server mod without carrying across its Windows-only
-detours, client UI hooks, executable pattern scans, or RPC transport.
+- What has been inspected
+- What has been implemented
+- What has been built
+- What has been tested
+- What failed and why
+- What was accepted
+- Current hashes and evidence locations
+- The exact safety boundary
+- What must happen next
 
-The finished Linux port is intended to let storage owned by camps in the
-same guild participate in one server-authoritative shared storage system.
+This is a living technical runsheet rather than a public-facing project
+overview. The repository README contains the high-level project
+description.
 
-## Target platform
+---
 
-The port currently targets:
+## 1. Current position
 
-- Palworld dedicated server running natively on Linux
-- x86-64
-- NullPrism RE-UE4SS-Linux
-- Native C++ user mods loaded as `main.so`
-- A dedicated-server-only execution model
+### Current accepted stage
 
-Listen servers, single-player sessions, client UI modification, and
-Windows builds are outside the current Linux scope.
+```text
+Stage 4c.3 — controlled single registration
+```
 
-## Technology
+Stage 4c.3 has demonstrated one explicitly armed call to:
 
-### NullPrism RE-UE4SS-Linux
+```text
+OnAvailableConcreteModel_ServerInternal
+```
 
-NullPrism provides the native Linux UE4SS loader and the Unreal
-reflection surface used by this port.
+The call was made:
 
-The mod is installed in the standard native-mod layout:
+- On the Unreal game thread
+- On a native Linux Palworld dedicated server
+- Against an isolated populated-world clone
+- For one real chest
+- Against one foreign camp storage in the same guild
+- With reflected parameter metadata
+- With a zeroed parameter buffer
+- With a process-lifetime one-shot guard
+- Without crashes or thread violations
+- Without touching production
+
+The isolated server remained stable for 180 seconds after the call.
+
+### Current acceptance boundary
+
+Stage 4c.3 proves that one reflected registration call can complete
+without destabilising the isolated populated dedicated server.
+
+It does **not** yet prove:
+
+- That the target storage retained the foreign chest
+- That gameplay routing changed
+- That the exact pair can be registered repeatedly without duplication
+- That registration survives or must be rebuilt after restart
+- That all 285 planned pairs are safe
+- That stale registrations can be removed
+- That periodic reconciliation is safe
+- That the candidate is ready for production
+
+### Next stage
+
+```text
+Stage 4c.4 — registration-effect observability
+```
+
+The next task is to identify a readable property or query on the selected
+storage module that exposes whether the selected foreign chest is
+present before and after registration.
+
+No duplicate call or full-plan mutation should be attempted until the
+effect can be observed.
+
+---
+
+## 2. Repository and branch strategy
+
+### Upstream
+
+```text
+Repository:
+Sarfflow/palworld-integrated-storage
+
+Licence:
+MIT
+```
+
+### Linux fork
+
+```text
+Repository:
+ManaPirate/palworld-integrated-storage-linux
+
+Development branch:
+linux/nullprism-dedicated-server
+```
+
+### Remote safety
+
+```text
+origin:
+git@github.com:ManaPirate/palworld-integrated-storage-linux.git
+
+upstream fetch:
+git@github.com:Sarfflow/palworld-integrated-storage.git
+
+upstream push:
+disabled://upstream-push-is-blocked
+```
+
+A push hook blocks accidental pushes to upstream.
+
+### Merge strategy
+
+Development remains on:
+
+```text
+linux/nullprism-dedicated-server
+```
+
+until the Linux port has:
+
+- Safe registration
+- Observable effect
+- Idempotency
+- Full-plan execution
+- Reconciliation
+- Populated-world stability
+- Restart validation
+- Installation and rollback documentation
+
+The branch will eventually be merged normally into the fork's `main`
+branch. It will not replace `main` through a force push.
+
+A first usable release is expected to use a Linux-specific tag such as:
+
+```text
+v0.1.0-linux
+```
+
+---
+
+## 3. Environment
+
+### Production server
+
+```text
+Host root:
+/mnt/disk1/Servers/Palworld
+
+Container root:
+/serverdata/serverfiles
+
+Active binary directory:
+/mnt/disk1/Servers/Palworld/Pal/Binaries/Linux
+
+Container binary directory:
+/serverdata/serverfiles/Pal/Binaries/Linux
+
+Docker container:
+Palworld
+```
+
+Production image:
+
+```text
+Image:
+ghcr.io/ich777/steamcmd:palworld
+
+Image ID:
+sha256:c80c48da27724e9c45cf404581af6bdbc29d2cc8de8b76af1ee68db58c6feb7b
+
+Digest:
+ghcr.io/ich777/steamcmd@sha256:43d0d487e27edf8992ce5b977b5084360fef21a016231f018dcb7a905be81fa9
+```
+
+Container environment:
+
+```text
+Debian:
+13.2 trixie
+
+Architecture:
+x86-64
+
+glibc:
+2.41
+```
+
+Palworld version during current validation:
+
+```text
+v1.0.2.101103
+```
+
+### Development environment
+
+```text
+Development root:
+/mnt/disk1/Development/palworld-linux-mods
+
+Development container:
+palworld-mod-dev
+
+Image:
+palworld-mod-dev:trixie
+
+Repository:
+/workspace/palworld-integrated-storage-linux
+
+NullPrism source:
+/workspace/RE-UE4SS-Linux
+
+Live binary directory mount:
+/palworld-live:ro
+```
+
+Toolchain includes:
+
+- clang
+- lld
+- cmake
+- ninja
+- Rust
+- GNU binutils
+
+The complete NullPrism project build has not been accepted because the
+current Rust toolchain is 1.85 and one dependency requires let-chains
+stabilised in Rust 1.88.
+
+The official release loader has been validated and is used as the
+authoritative loader artifact.
+
+### Isolated test environment
+
+```text
+Root:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test
+
+Container:
+Palworld-NullPrism-Test
+
+UDP port:
+18211
+
+TCP port:
+35575
+
+Restart policy:
+no
+
+Public lobby:
+disabled
+```
+
+World ID:
+
+```text
+6E97A850BDBA49838BCFCC6190C15217
+```
+
+Baseline populated save:
+
+```text
+Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Player saves:
+19
+```
+
+Normal isolated mod restored after every mutation test:
+
+```text
+main.so SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+```
+
+### Production verification rule
+
+Docker reporting `Running=true` is not sufficient by itself.
+
+Where practical, production checks include:
+
+- `PalServer-Linux-Shipping` child process exists
+- UDP 8211 is listening
+- Container `StartedAt` remains unchanged
+- PalServer PID remains unchanged
+- Expected mods load
+- No restart-count change
+
+`/proc/<pid>/maps` is not used as a loader-verification source because
+container permissions produced false negatives.
+
+---
+
+## 4. NullPrism integration
+
+### Canonical project
+
+```text
+https://github.com/NullPrism/RE-UE4SS-Linux
+```
+
+Pinned release:
+
+```text
+Tag:
+linux-v0.1.0
+
+Commit:
+5d33654755efed844336497e8a9a15e6716b5d6c
+```
+
+Official loader identity:
+
+```text
+SHA256:
+26dffce875fb771fb2ac2a63325e7effb5551a03a35598810f13d2e6c854a1ff
+
+GNU Build ID:
+13ef3e82b23ba8ef677a7aa747d3d725395a4789
+```
+
+### Native mod layout
 
 ```text
 Mods/ModIntegratedStorageCpp/
@@ -41,155 +339,1519 @@ Mods/ModIntegratedStorageCpp/
 └── enabled.txt
 ```
 
-The library exports the standard native lifecycle functions:
+Exports:
 
 ```text
 start_mod
 uninstall_mod
 ```
 
-### Unreal reflection
+The mod derives from:
 
-The implementation uses Unreal reflection rather than hard-coded Linux
-object layouts wherever a reflected alternative is available.
+```text
+RC::CppUserModBase
+```
 
-Current reflected operations include:
+### Loader policy
 
-- Discovering camp, chest, and storage objects
-- Reading camp guild identifiers
-- Reading camp module arrays
-- Resolving chest ownership through
-  `GetBaseCampModelBelongTo`
-- Resolving registration through
-  `OnAvailableConcreteModel_ServerInternal`
-- Inspecting function parameter metadata
-- Validating object-property type, size, offset, and accepted class
-- Constructing zeroed parameter buffers from reflected metadata
+The project must not:
 
-The port does not assume that an input or return value is at byte offset
-zero. Offsets and bounds are validated before use.
+- Install a second UE4SS
+- Set global `LD_PRELOAD`
+- Replace the validated NullPrism loader
+- Modify production loader state during isolated tests
 
-### Threading model
+The production `user.sh` uses a process-scoped launcher patch rather than
+a global preload.
 
-NullPrism's normal mod update callback is not the Unreal game thread.
+Production launcher SHA256:
 
-The port therefore separates work into two paths:
+```text
+3ef75beb1407af4f9a41e2d0aa5e2c1fa77b94b114b1a691e5aad5256c9d9ae7
+```
 
-- The worker-side update path observes world state and requests work.
-- The EngineTick callback performs Unreal `ProcessEvent` calls and other
-  game-thread-only operations.
+---
 
-Dedicated-server role checks, chest ownership queries, registration
-metadata validation, and registration calls are executed on the Unreal
-game thread.
+## 5. Port scope
 
-Atomic state is used to coordinate requests and prevent overlapping
-association passes.
+### Retained server-side behaviour
+
+The Linux port is intended to retain:
+
+- Dedicated-server role validation
+- World lifecycle safety
+- Camp discovery
+- Guild discovery
+- Camp storage-module discovery
+- Chest discovery
+- Chest ownership association
+- Same-guild cross-camp registration
+- Reconciliation
+- Configuration
+- Diagnostics
+- Server-authoritative shared storage behaviour
+
+### Excluded behaviour
+
+The Linux dedicated-server port excludes:
+
+- Windows API dependencies
+- PolyHook
+- x86 executable AOB hooks
+- Structured Exception Handling
+- Windows `wchar_t` assumptions
+- Windows DLL export declarations
+- Client inventory detours
+- Client crafting UI hooks
+- Client display-slot injection
+- HUD changes
+- RPC transport from the combined Windows client/server mod
+- Listen-server support
+- Single-player support
+
+The upstream Windows implementation remains preserved in:
+
+```text
+src/dllmain.cpp
+```
+
+The Linux port must not overwrite or erase the upstream implementation.
+
+---
+
+## 6. Technical architecture
+
+### Worker and game-thread split
+
+NullPrism's normal update callback is a worker thread.
+
+This was verified in Stage 4b.2a:
+
+```text
+initialized=1
+game=0
+```
+
+Therefore:
+
+- Worker-side update observes world state and requests work
+- EngineTick executes Unreal calls
+- `ProcessEvent` must not run from the worker callback
+
+### EngineTick callback
+
+NullPrism APIs used:
+
+```text
+IsEngineTickAvailable()
+IsProcessEventAvailable()
+RegisterEngineTickPreCallback(...)
+UnregisterCallback(...)
+```
+
+Callback type:
+
+```text
+std::function<
+    void(
+        TCallbackIterationData<void>&,
+        UEngine*,
+        float,
+        bool
+    )
+>
+```
+
+Callback ID:
+
+```text
+GlobalCallbackId = uint64_t
+ERROR_ID = 0
+```
+
+`UnregisterCallback` must not be called inside the callback because that
+can deadlock.
+
+The mod unregisters in the destructor and waits for callback and
+association activity to become quiescent.
 
 ### Process-lifetime module pin
 
-The mod retains one additional `dlopen` reference to its own shared
-library for the lifetime of the PalServer process.
+NullPrism's wrapper can release the original shared-library handle after
+`uninstall_mod`.
 
-This prevents NullPrism callback storage from referencing unmapped
-native code if the original mod handle is released before deferred
-callback cleanup completes.
+Callback garbage collection can destroy stored `std::function` objects
+later.
 
-Native hot reload is therefore intentionally unsupported.
+If `main.so` were unloaded first, the callback destructor or invoker could
+point into unmapped code.
 
-## Server-side model
+The mod therefore:
 
-The Linux port builds the storage relationship from reflected server
-objects.
+1. Uses `dladdr` on its own symbol
+2. Obtains its native library path
+3. Calls `dlopen(path, RTLD_NOW | RTLD_LOCAL)`
+4. Retains that additional handle for the PalServer process lifetime
+5. Never calls `dlclose` on the retained handle
 
-### Camps and guilds
+This intentionally disables native hot reload, which NullPrism does not
+currently support safely for this callback path.
 
-Each valid camp is associated with its 16-byte guild identifier.
+A standalone diagnostic verified:
 
-Guild identifiers are handled as binary data rather than Linux
-`wchar_t`, avoiding the platform-width mismatch with Unreal's
-two-byte character representation.
+```text
+MODULE_PIN result=PASS
+```
 
-### Storage modules
+### Cross-DSO allocator precautions
 
-Every `PalBaseCampModuleItemStorage` module is collected from each valid
-camp.
+Two crashes were traced to cross-module lifetime and allocator issues.
 
-Camps with a storage module remain valid registration targets even when
-they currently contain no chest models.
+The following patterns are prohibited:
 
-### Chests
+- Returning temporary strings that are destroyed in another runtime
+- Passing a local `std::vector<UObject*>` to `FindAllOf` and allowing it
+  to destruct across DSO allocator boundaries
+- Passing named callback metadata strings across the mod/loader boundary
 
-Every `PalMapObjectItemChestModel` is discovered and associated with its
-owning camp through the reflected
-`GetBaseCampModelBelongTo` function.
+Current mitigations:
 
-### Registration plan
+- Use class-pointer identity rather than `FName::ToString`
+- Use process-lifetime heap discovery vectors
+- Reuse vectors with `clear()` without releasing capacity
+- Pass empty/default callback metadata strings
+- Keep callback code mapped through the process-lifetime module pin
 
-For each guild, the port creates every unique pair where:
+---
 
-- The chest and storage belong to the same guild.
-- The storage belongs to a different camp from the chest.
-- The chest, storage, camp, and guild relationships are valid.
-- Duplicate pointers and duplicate exact pairs are rejected.
-- Conflicting camp or guild ownership aborts plan acceptance.
+## 7. Data model
 
-The current populated-world validation plan contains 157 chests,
-20 storage modules, and 285 same-guild foreign-camp registration pairs.
+### Guild key
 
-## Current implementation boundary
+Palworld's guild identifier is handled as:
 
-The port has demonstrated one controlled invocation of
-`OnAvailableConcreteModel_ServerInternal` on an isolated populated-world
-clone.
+```cpp
+std::array<std::uint8_t, 16>
+```
 
-That call was protected by:
+This avoids Linux `wchar_t` width differences and treats the identifier as
+binary data.
 
-- An explicit arm file
+### Camp discovery
+
+Discovery:
+
+```cpp
+FindAllOf(STR("PalBaseCampModel"), camps)
+```
+
+Validated fields:
+
+```text
+UPalBaseCampModel.ModuleArray
+Observed offset: 0x180
+
+GroupIdBelongTo
+Observed offset: 0xE4
+```
+
+Storage class:
+
+```text
+PalBaseCampModuleItemStorage
+```
+
+Storage modules are recognised by reflected class-chain pointer identity.
+
+### Chest discovery
+
+Discovery:
+
+```cpp
+FindAllOf(STR("PalMapObjectItemChestModel"), chests)
+```
+
+Ownership function:
+
+```text
+GetBaseCampModelBelongTo
+```
+
+Ownership is resolved on the Unreal game thread.
+
+The implementation:
+
+- Resolves the function by name
+- Reads `GetParmsSize()`
+- Reads `GetReturnValueOffset()`
+- Validates return bounds
+- Uses a zeroed byte buffer
+- Calls `ProcessEvent`
+- Copies the returned `UObject*` through `memcpy`
+- Validates the returned camp class
+
+It does not use the raw upstream manager offset path.
+
+### Storage registration function
+
+Function:
+
+```text
+OnAvailableConcreteModel_ServerInternal
+```
+
+Observed parameter metadata:
+
+```text
+Parameter bytes:   8
+Input parameters:  1
+Object inputs:     1
+Object offset:     0
+Object size:       8
+Property flags:    0x18001000000280
+Property class:    valid
+Chest compatible:  yes
+```
+
+The Linux implementation does not assume the input offset is zero even
+though the current observed offset is zero.
+
+The reflected offset and bounds are validated before each controlled
+call.
+
+---
+
+## 8. Accepted commit history
+
+```text
+4bd97c9
+docs: add NullPrism Linux port plan
+
+ff39c1f
+docs: identify project as Linux NullPrism port
+
+1cc4482
+feat(linux): add NullPrism lifecycle scaffold
+
+82a65b28c1850532f758f42d0db3d40f86b6554d
+feat(linux): validate populated storage discovery
+
+debf0e1f20dbdcc4bff8319a641845ae57761412
+feat(linux): associate chests with camps and guilds
+
+b0017c8b48c2e84acdb1de74c5beff146df889fe
+fix(linux): resolve dedicated role on game thread
+
+e53faa1adb639858f22220877d374b48b0cef706
+feat(linux): validate registration metadata read-only
+
+153a3c35f0d14f4dbd679659daa6a246e18aa165
+feat(linux): add deterministic registration planner
+```
+
+Stage 4c.3 is pending commit at the time this runsheet version was
+prepared.
+
+---
+
+## 9. Stage-by-stage runsheet
+
+## Stage 4a — camp, guild, and storage discovery
+
+### Goal
+
+Build a read-only dedicated-server discovery baseline.
+
+### Implementation
+
+- `std::chrono::steady_clock`
+- 16-byte binary guild keys
+- Reflected reads of `GroupIdBelongTo`
+- Reflected reads of `ModuleArray`
+- Storage class pointer identity
+- Dedicated-server role detection
+- Periodic diagnostic summaries
+- No chest traversal
+- No hooks
+- No RPC
+- No mutation
+
+### Initial failures
+
+#### Failure 1: `FName::ToString`
+
+Using `FName::ToString` created a cross-runtime temporary-destruction path.
+
+Fix:
+
+```text
+StaticFindObject<UClass*>(
+    "/Script/Pal.PalBaseCampModuleItemStorage"
+)
+```
+
+and class pointer identity.
+
+#### Failure 2: local discovery vector
+
+A local:
+
+```cpp
+std::vector<UObject*>
+```
+
+was passed to `FindAllOf` and later destructed through a cross-DSO
+allocator path.
+
+Fix:
+
+- Process-lifetime heap vector
+- Reuse with `clear()`
+- Never release capacity during the process
+
+### Accepted populated-world result
+
+```text
+Camps:    20
+Guilds:   8
+Storages: 20
+```
+
+Accepted candidate:
+
+```text
+Version:
+0.1.0-linux-stage4a.2
+
+Source SHA256:
+ef58b4c4d1333301a148662ce0a755f883883b8156c3ed1a27cb58855938e38f
+
+Artifact SHA256:
+92f38aebcabf4d0f93809a2d14e5bdc0dbcc1154c969ab3b298c900426d5acf6
+
+Build ID:
+4ca5c6b413b64445df024f676c71cc57ba9c3544
+```
+
+Runtime:
+
+```text
+Populated camps:    20
+Populated guilds:   8
+Populated storages: 20
+Stability window:   180 seconds
+Crashes:            0
+```
+
+---
+
+## Stage 4b.1 — chest object discovery
+
+### Goal
+
+Enumerate candidate chest objects without reading properties or invoking
+functions.
+
+### Implementation
+
+- Second process-lifetime heap vector
+- `FindAllOf(STR("PalMapObjectItemChestModel"), chests)`
+- Count non-null and null pointers only
+- No ownership association
+- No raw manager offset
+- No `ProcessEvent`
+- No mutation
+
+### Candidate
+
+```text
+Version:
+0.1.0-linux-stage4b.1
+
+Source SHA256:
+7a69fa3e0e3bab8e95c5fdca377fd0f449e18dcee8a454c4bb9a017a39972239
+
+Artifact SHA256:
+9917e342938b1749d2d0b738b9cd808f8f5a4ee9018a7fd58d9ae42db808579e
+
+Build ID:
+45643b5e68135810f0726785cdd4497f5f767ea2
+```
+
+### Runtime acceptance
+
+```text
+Chest objects: 157
+Valid:         157
+Null:          0
+Stable:        180 seconds
+Summaries:     26
+PASS markers:  24
+Crashes:       0
+```
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b1-populated-20260806-062026
+```
+
+---
+
+## Stage 4b.2a — callback thread probe
+
+### Goal
+
+Determine whether the normal native mod update callback is the Unreal
+game thread.
+
+### Result
+
+```text
+initialized=1
+game=0
+```
+
+Conclusion:
+
+```text
+on_update() is a worker thread
+```
+
+All chest ownership and future registration `ProcessEvent` calls must be
+handed to the EngineTick callback.
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2a-thread-20260806-064245
+```
+
+---
+
+## Stage 4b.2 — chest-to-camp-to-guild association
+
+### Goal
+
+Resolve:
+
+```text
+chest model -> owning camp -> guild
+```
+
+without mutation.
+
+### Implementation
+
+- EngineTick callback
+- Game-thread validation
+- Reflected `GetBaseCampModelBelongTo`
+- Reflected parameter size
+- Reflected return offset
+- Zeroed parameter buffer
+- `memcpy` of returned `UObject*`
+- Camp class validation
+- Guild-key validation
+- Reentrancy prevention
+- Process-lifetime module pin
+- Callback unregister outside callback
+- Empty callback metadata strings
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4b.2
+
+Source SHA256:
+62f50bb237b026fbea95e38f50995f649fdac3b9053c0703e938930fdb00cb90
+
+Artifact SHA256:
+c0eec3094676d047cd7152cbd0e8827c4a2891cf1323744a8760c7a75c89f582
+
+Build ID:
+01ca9ad63e65948fa887b12b53043614abafa4b6
+```
+
+### Runtime acceptance
+
+```text
+Chest objects:       157
+Valid chests:        157
+Associated chests:   157
+Unassociated chests: 0
+Guilds:              8
+Chest-owning camps:  17
+Missing function:    0
+Invalid parameters:  0
+Invalid camp:        0
+Missing guild:       0
+Zero guild:          0
+Stable:              180 seconds
+Crashes:             0
+```
+
+Three of the 20 valid camps have no chest models, explaining the
+17 chest-owning camps.
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2-retry-20260806-071924
+```
+
+Accepted commit:
+
+```text
+debf0e1f20dbdcc4bff8319a641845ae57761412
+feat(linux): associate chests with camps and guilds
+```
+
+---
+
+## Stage 4c.1 — upstream registration-path survey
+
+### Goal
+
+Identify the actual server mutation path before implementing it.
+
+### Key upstream finding
+
+The Windows implementation does not directly mutate `ModuleArray`, chest
+containers, or item arrays.
+
+It registers foreign chest concrete models with storage modules:
+
+```cpp
+g_srvInjecting = true;
+
+for (auto& guild_entry : fresh)
+{
+    GuildData& guild = guild_entry.second;
+
+    for (UObject* storage : guild.storages)
+    {
+        UObject* storage_camp =
+            guild.storageCamp[storage];
+
+        for (UObject* model : guild.models)
+        {
+            if (guild.modelCamp[model] != storage_camp)
+            {
+                srvCall1(
+                    storage,
+                    STR(
+                        "OnAvailableConcreteModel_"
+                        "ServerInternal"
+                    ),
+                    model
+                );
+            }
+        }
+    }
+}
+
+g_srvInjecting = false;
+```
+
+Important implications:
+
+- Every guild chest is grouped by owning camp
+- Every camp storage is grouped by owning camp
+- Empty camps with storage are valid targets
+- Only foreign-camp pairs are registered
+- Registration can re-fire storage events
+- A reentrancy guard is required
+- Upstream reconciles periodically
+- No obvious paired unavailable/removal call was found textually
+
+Textual absence does not prove no removal path exists at runtime.
+
+---
+
+## Stage 4c.1d — read-only registration metadata probe
+
+### Goal
+
+Resolve and inspect the real registration function without calling it.
+
+### Candidate
+
+```text
+Version:
+0.1.0-linux-stage4c.1d-metaprobe
+
+Source SHA256:
+6b79d8d8d0fecf766fdbec5e4037126a0ee19eb2f0c57b49d95e974fcddcf502
+
+Artifact SHA256:
+2b131761bedfc49aa1b0f7bab3a15d5018a69f1030c1f370f49e3f45dfe8bb4c
+
+Build ID:
+dba6b1d444ee8eed37228cdb3f4665663b23e1f1
+```
+
+### Runtime acceptance
+
+A real associated chest and foreign same-guild storage were selected.
+
+Observed on 25 stable passes:
+
+```text
+candidate=1
+target=1
+function=1
+parms=8
+inputs=1
+object_inputs=1
+offset=0
+size=8
+flags=0x18001000000280
+property_class=1
+compatible=1
+```
+
+The function was not invoked.
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1d-metaprobe-20260806-070751
+```
+
+---
+
+## Stage 4c.1e — game-thread role hardening
+
+### Problem
+
+The worker update path called the PalUtility role resolver, which used
+`ProcessEvent`.
+
+Role state also used plain integers.
+
+### Fix
+
+- `g_is_server` changed to `std::atomic_int`
+- `g_is_dedicated` changed to `std::atomic_int`
+- Added `g_role_probe_requested`
+- Worker requests role resolution
+- EngineTick resolves role
+- Added a process-lifetime game-thread role camp buffer
+- World reset clears role state and pending request
+- Destructor clears pending request
+- Dedicated role is authoritative
+- Server role remains diagnostic
+
+### Candidate
+
+```text
+Version:
+0.1.0-linux-stage4c.1e-role-thread
+
+Source SHA256:
+36d186f648c4d8b1b97648a7fba64ef9b21c9a4b80961b2f7bb3a72da372ea1e
+
+Artifact SHA256:
+83f7e747888beb6e952b856418e39f036c7210e478cc9b7d5664aa7b85f81f63
+
+Build ID:
+cb7436c3e1b220ec18c0673dc990534a51c8421d
+```
+
+### Runtime acceptance
+
+```text
+ROLE THREAD=GAME
+ROLE server=1 dedicated=1
+ROLE RESULT=PASS
+```
+
+Chest association remained:
+
+```text
+157 / 157 associated
+```
+
+No:
+
+- Post-pass no-context markers
+- Not-dedicated markers
+- Role mismatches
+- Invalid thread markers
+- Exceptions
+- Crashes
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1e-role-thread-20260806-073648
+```
+
+Accepted commit:
+
+```text
+b0017c8b48c2e84acdb1de74c5beff146df889fe
+fix(linux): resolve dedicated role on game thread
+```
+
+---
+
+## Stage 4c.1f — combined role and metadata validation
+
+### Implementation
+
+- `UnrealType.hpp`
+- Independent registration-probe camp vector
+- `ForEachProperty`
+- `CPF_Parm` filtering
+- `CPF_ReturnParm` exclusion
+- `CastField<FObjectProperty>`
+- Reflected property offset
+- Reflected property size
+- Reflected flags
+- Reflected accepted class
+- Same-guild foreign-camp candidate selection
+- Metadata probe called before chest-run increment
+- No registration invocation
+
+### Candidate
+
+```text
+Version:
+0.1.0-linux-stage4c.1f-role-metaprobe
+
+Source SHA256:
+e0d835a01a7bcc65941e88b941e3921848dcb52c8a1104683d981ccd06ad39ba
+
+Artifact SHA256:
+8830aa3ccea60c556ffae00204d6008ff9b738ca45dcad46c67fe0860ffc47c7
+
+Build ID:
+e4f66b2facd65e928b232ed69cf91ceae7261aaa
+```
+
+### Runtime acceptance
+
+```text
+ROLE THREAD=GAME:       1
+ROLE RESULT=PASS:       1
+REG_META PASS:          25
+REG_META INCOMPLETE:    0
+CHEST_ASSOC PASS:       25
+CHEST_ASSOC INCOMPLETE: 0
+Invalid thread:         0
+Exceptions:             0
+Crashes:                0
+```
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1f-combined-20260806-075812
+```
+
+Accepted commit:
+
+```text
+e53faa1adb639858f22220877d374b48b0cef706
+feat(linux): validate registration metadata read-only
+```
+
+---
+
+## Stage 4c.2 — deterministic would-register planner
+
+### Goal
+
+Build the complete cross-camp registration plan without invoking the
+registration function.
+
+### Implementation
+
+- Enumerate all storage modules, not only the first
+- Group associated chest pointers by guild and camp
+- Group storage pointers by guild and camp
+- Include storage camps with no chest models
+- Create a pair only for:
+  - Same guild
+  - Different camps
+- Deduplicate:
+  - Chest pointers
+  - Storage pointers
+  - Exact storage/chest pairs
+- Detect:
+  - Chest camp conflicts
+  - Storage camp conflicts
+  - Chest guild conflicts
+  - Storage guild conflicts
+- Emit per-guild summaries
+- Emit global summary
+- Generate order-independent XOR and sum fingerprints
+- Retain one pair for metadata validation
+- Keep registration invocation disabled
+
+### Initial build failure
+
+The first build used:
+
+```cpp
+guild_hex.c_str()
+```
+
+on:
+
+```cpp
+std::array<char, 33>
+```
+
+Fix:
+
+```cpp
+guild_hex.data()
+```
+
+The accepted Stage 4c.1f package was restored automatically on failure.
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4c.2-would-register
+
+Source SHA256:
+12ee389499b6c5a5e944b7c4f34f70b378b775d7527df080ebc1e80cce5b8865
+
+Artifact SHA256:
+0d494b86751d317f102812622ecc5ff48b796d8f2f74cdeedaa2e22d41d2b1a3
+
+Build ID:
+427acb4e36a79956ce3c96f97473b507f3a697e2
+```
+
+Source safety inventory:
+
+```text
+ProcessEvent source calls:
+2
+
+Registration function calls:
+0
+```
+
+The two valid `ProcessEvent` calls were:
+
+1. PalUtility role query
+2. Chest ownership query
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c2-plan-20260806-083809
+```
+
+Results:
+
+```text
+ROLE THREAD=GAME:       1
+ROLE RESULT=PASS:       1
+Planner passes:         25
+Planner incomplete:     0
+Planner variants:       1
+Per-guild lines:        200
+Per-guild runs:         25
+Unique guild plans:     8
+Metadata passes:        25
+Metadata incomplete:    0
+Chest passes:           25
+Chest incomplete:       0
+Invalid thread:         0
+Exceptions:             0
+Crashes:                0
+```
+
+Stable global plan:
+
+```text
+Guilds:                 8
+Guilds with pairs:      7
+Associated chests:      157
+Storage modules:        20
+Foreign-camp pairs:     285
+Own-camp combinations:  157
+Duplicate chests:       0
+Duplicate storages:     0
+Duplicate pairs:        0
+Camp conflicts:         0
+Guild conflicts:        0
+Null camps:             0
+Invalid camps:          0
+Missing guilds:         0
+Zero guilds:            0
+Camps without storage:  0
+```
+
+One guild has only one camp and therefore no foreign target.
+
+Per-guild plan:
+
+| Guild | Chests | Storages | Foreign pairs | Own-camp excluded |
+|---|---:|---:|---:|---:|
+| `20f979c33446e7f1f8cea19499aad71a` | 22 | 3 | 44 | 22 |
+| `4fda64b78a4ae58954126eb13ec06dd3` | 3 | 1 | 0 | 3 |
+| `5c21c345d94ea28f2dd2fb842cb20be4` | 32 | 3 | 64 | 32 |
+| `64ad3b316644502f780ceebd2a31ff99` | 22 | 2 | 22 | 22 |
+| `966b6b8eca48b42eaa08b3a92e673d00` | 15 | 3 | 30 | 15 |
+| `9af4ac3e4a49def1993afeaced626523` | 31 | 4 | 93 | 31 |
+| `a21c73d1fd4d4539161573b06df671f8` | 10 | 2 | 10 | 10 |
+| `df4d6e7ea84f3b7db90b5ab07bc41b3e` | 22 | 2 | 22 | 22 |
+
+The fingerprints are process-local because they include Unreal object
+addresses.
+
+Accepted commit:
+
+```text
+153a3c35f0d14f4dbd679659daa6a246e18aa165
+feat(linux): add deterministic registration planner
+```
+
+---
+
+## Stage 4c.3 — controlled single registration
+
+### Goal
+
+Make the smallest possible real registration mutation:
+
+```text
+one chest -> one foreign same-guild storage
+```
+
+### Safety design
+
+The Stage 4c.3 candidate adds:
+
 - A default-disabled normal package
+- Adjacent arm file:
+  `dlls/main.so.stage4c3-arm`
+- A process-lifetime one-shot guard
+- Planner-completion validation
 - Dedicated-server validation
 - Unreal game-thread validation
 - Same-guild validation
 - Different-camp validation
 - Storage-class validation
-- Reflected function-parameter validation
-- A process-lifetime one-shot guard
+- Reflected registration metadata validation
+- Zeroed parameter buffer
+- `memcpy` of chest pointer at reflected offset
+- One registration `ProcessEvent` call site
+- No full loop
+- No reconciliation
+- No routing test
+- No production deployment
 
-The complete 285-pair registration loop is not yet enabled.
+### Candidate identity
 
-The next engineering task is to observe the selected storage's readable
-registration state before and after the call. This is required before
-testing duplicate-call idempotency or adding reconciliation.
+```text
+Version:
+0.1.0-linux-stage4c.3-single-registration
 
-## Safety rules
+Source SHA256:
+3ef9fd7d9c0452ed750fb65fd97811a225b55bea0ca76164b57d65bbb4cfd5f6
 
-Development follows these boundaries:
+Artifact SHA256:
+f86c7a27b7b5273a572a835448a035da856bc5c48b5763ef5bc90856da073e32
+
+Build ID:
+c10b62417231f2dea11e9256d43d9704c769ae6f
+```
+
+Build exports:
+
+```text
+start_mod:
+0000000000003970
+
+uninstall_mod:
+0000000000003ba0
+```
+
+Source inventory:
+
+```text
+ProcessEvent source calls:
+3
+
+Controlled registration ProcessEvent calls:
+1
+```
+
+### Static build acceptance
+
+Warnings were limited to the previously observed SDK warnings:
+
+- Two `Atomic.hpp` switch warnings
+- Two deprecated enum-conversion warnings
+- One undefined-inline warning in `UnrealType.hpp`
+
+The build completed and linked.
+
+Verified:
+
+- Stage 4c.3 version string
+- Registration function string
+- Armed gate marker
+- Disabled gate marker
+- Called marker
+- Blocked marker
+- Exception marker
+- Arm-file suffix
+- Planner marker
+- Metadata marker
+- Role marker
+- No arm file in normal staged package
+- No `FName::ToString` import
+- No UObject discovery-vector destructor import
+
+### Unarmed runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-unarmed-20260806-095324
+```
+
+Results:
+
+```text
+Gate disabled markers:   1
+Gate armed markers:      0
+Registration called:     0
+Registration blocked:    0
+Registration exceptions: 0
+Planner passes:          25
+Planner incomplete:      0
+Metadata passes:         25
+Metadata incomplete:     0
+Chest passes:            25
+Chest incomplete:        0
+Invalid thread markers:  0
+Other exceptions:        0
+Crash markers:           0
+```
+
+Final plan remained:
+
+```text
+guilds=8
+active_guilds=7
+chests=157
+storages=20
+pairs=285
+own_camp=157
+all conflict and error counts=0
+```
+
+The isolated mod and save were restored exactly.
+
+Production remained:
+
+```text
+PalServer PID:
+171
+
+Container StartedAt:
+2026-08-06T08:33:34.425634823Z
+```
+
+### Armed runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-armed-20260806-100441
+```
+
+An arm file was created only inside the isolated candidate:
+
+```text
+dlls/main.so.stage4c3-arm
+```
+
+Results:
+
+```text
+Gate armed markers:         1
+Gate disabled markers:      0
+Registration detail lines:  1
+Registration called:        1
+Registration blocked:       0
+Registration exceptions:    0
+Post-call planner passes:    24
+Planner incomplete:         0
+Post-call metadata passes:   24
+Metadata incomplete:        0
+Post-call chest passes:      25
+Chest incomplete:           0
+Invalid thread markers:      0
+Other exception markers:     0
+Crash markers:               0
+New crash files:             0
+```
+
+Controlled call detail:
+
+```text
+run=1
+plan=1
+chest=1
+chest_camp=1
+target=1
+target_camp=1
+different_camps=1
+same_guild=1
+storage_class=1
+game_thread=1
+dedicated=1
+metadata=1
+parms=8
+offset=0
+size=8
+```
+
+The server remained stable for 180 seconds after the call.
+
+The one-shot guard prevented additional registration calls across later
+scans.
+
+The pre-restoration `Level.sav` hash changed:
+
+```text
+e6a3a55f272bcc3535827e4c707e97397bc8726626a13847ff366f71b54cd436
+```
+
+This is not treated as proof of registration persistence because a
+running Palworld server normally updates its save and no equal-duration
+unarmed control save was compared.
+
+After the test:
+
+```text
+Restored isolated mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Restored Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Restored player saves:
+19
+```
+
+Production remained unchanged:
+
+```text
+PalServer PID:
+171
+
+Container StartedAt:
+2026-08-06T08:33:34.425634823Z
+```
+
+### Stage 4c.3 acceptance statement
+
+Accepted:
+
+- One real reflected registration call completed
+- The call used the Unreal game thread
+- All planned safety checks passed
+- Exactly one call occurred
+- The server remained stable for 180 seconds
+- No native exception or crash evidence appeared
+- The isolated environment was restored
+- Production was unchanged
+
+Not accepted yet:
+
+- Observable storage membership change
+- Duplicate-call idempotency
+- Complete pair registration
+- Periodic reconciliation
+- Restart persistence
+- Stale registration removal
+- Production use
+
+---
+
+## 10. Known operational mistakes and lessons
+
+The following failures occurred during development and are retained here
+to prevent recurrence.
+
+### Shell and harness issues
+
+- Nested quoting expanded variables under `set -u`
+- Large heredocs were mangled by chat rendering
+- Embedded Markdown fences ended shell blocks early
+- `fc -ln -1` was not suitable for recovering multiline heredocs
+- Long terminal echo could look corrupted even when execution succeeded
+- Host has no `python3`; Python must run in the development container
+- `grep | head | tee` under `set -o pipefail` produced SIGPIPE status 141
+- Evidence report generation must not invalidate an otherwise accepted
+  runtime test
+
+### Runtime harness issues
+
+- An early harness checked `UE4SS.log` instead of Docker stderr
+- Startup checks initially had no grace period
+- Initial populated-world runs stopped at transient `EMPTY`
+- Save-clone assumptions failed repeatedly
+- A broad grep for `archive` matched unrelated `FArchiveState`
+- Post-slice summary counts can be one lower than PASS markers when the
+  slice begins at the first PASS line rather than its preceding summary
+
+### Source patch issues
+
+- Several patch scripts guessed source shape incorrectly
+- Stage 4c.1d had a duplicate anchor
+- A conditional marker helper caused literal decay problems
+- A correct build was rolled back by an incorrect string-encoding audit
+- Stage 4c.2 initially called `.c_str()` on `std::array<char, 33>`
+- A survey searched for a contiguous registration string even though the
+  C++ source split it across two adjacent literals
+- The first Stage 4c.3 audit searched for the complete runtime arm
+  filename in source even though source only stored the suffix
+
+### Safety lessons
+
+- Artifact-level `ProcessEvent` import does not prove registration
+  mutation because role and ownership queries legitimately import it
+- Source call-site inventory is authoritative for controlled mutation
+- A successful `ProcessEvent` return does not prove gameplay effect
+- Textual absence of a removal function is not proof of runtime absence
+- An ambiguous standalone module-pin crash must not be treated as a
+  definitive pin failure
+- Production must be checked independently before claiming it remained
+  unchanged
+- Docker `Running` can survive a child process boot loop
+
+---
+
+## 11. Current safety rules
+
+The following rules remain mandatory:
 
 - No global `LD_PRELOAD`
 - No second UE4SS installation
-- No Windows detours or executable AOB hooks
-- No Unreal `ProcessEvent` calls from worker threads
 - No direct production mutation during development
-- No full registration loop before single-pair observability and
-  idempotency are proven
+- No Unreal `ProcessEvent` from worker threads
 - No incoming chat `FText` mutation
-- No assumption that a successful function return proves gameplay effect
-- Full isolated-save and mod restoration after mutation tests
+- No direct `ModuleArray` mutation when a reflected server function exists
+- No full 285-pair call loop before effect observability
+- No duplicate-call test before effect observability
+- No periodic reconciliation before exact-pair idempotency
+- No claim of persistence from a changed save hash alone
+- No production deployment before rollback and reconciliation are proven
 - Preserve upstream MIT attribution
+- Preserve `src/dllmain.cpp`
+- Keep normal staged mutation candidates unarmed by default
+- Snapshot and restore isolated mod and save around every mutation test
+- Verify production PID and container start time after every isolated test
 
-## Intended release path
+---
 
-Before the first usable Linux release, the port still needs:
+## 12. Stage 4c.4 plan — effect observability
 
-1. Readable registration-effect observability
-2. Exact-pair idempotency validation
-3. Complete registration-plan execution
-4. Guarded periodic reconciliation
-5. Stale registration and camp-change handling
-6. Populated-world restart validation
-7. Configuration and troubleshooting documentation
-8. Production rollback instructions
+### Objective
 
-Stage-by-stage build identities, hashes, test evidence, and acceptance
-records are maintained separately in
-[`validation-history.md`](validation-history.md).
+Determine whether the selected target storage exposes a readable state
+showing that the selected foreign chest is registered.
+
+### Required survey
+
+Inspect:
+
+- Upstream registration-related fields and helpers
+- NullPrism property APIs
+- `FArrayProperty`
+- `FSetProperty`
+- `FMapProperty`
+- `FObjectProperty`
+- Script array/set/map helpers
+- Generated or SDK storage types
+- PalServer UTF-16 and ASCII strings
+- Possible read-only query functions
+- Possible removal or refresh functions
+
+### Candidate observation types
+
+Preferred order:
+
+1. Reflected query function returning membership
+2. Reflected array or set of registered concrete models
+3. Reflected map keyed by concrete model
+4. Read-only count plus exact pointer scan
+5. Carefully validated raw container read only when reflection provides
+   the container metadata but no helper API
+
+### Required validation
+
+Before a second mutation call:
+
+- Identify exact storage property or query
+- Validate property type
+- Validate element type
+- Validate container bounds
+- Read selected chest membership before registration
+- Call the one-shot registration
+- Read selected chest membership after registration
+- Demonstrate a specific before/after change
+- Repeat after later scans to confirm retention
+
+### Prohibited during Stage 4c.4
+
+- Full 285-pair mutation
+- Periodic reconcile
+- Item transfer tests
+- Production deployment
+- Guessing a raw property offset
+- Writing directly into the observed collection
+- Calling a second registration until the first effect is observable
+
+### Acceptance target
+
+A future Stage 4c.4 acceptance should report something equivalent to:
+
+```text
+Selected chest present before call:
+0
+
+Registration call:
+1
+
+Selected chest present immediately after call:
+1
+
+Selected chest present after stability window:
+1
+
+Crashes:
+0
+
+Thread violations:
+0
+```
+
+Only after this result should exact-pair idempotency be tested.
+
+---
+
+## 13. Later stages
+
+### Stage 4c.5 — exact-pair idempotency
+
+- Observe membership before first call
+- Call selected pair once
+- Observe membership
+- Call the same pair a second time
+- Observe whether count and membership remain stable
+- Confirm no duplicate entry
+- Confirm no crash
+- Restore isolated save
+
+### Stage 4d — complete planned registration
+
+- Explicit feature gate
+- Execute all 285 deduplicated pairs
+- Reentrancy guard
+- Per-pair success/failure diagnostics
+- No periodic reconciliation initially
+- Observe resulting storage membership
+- Long populated-world stability window
+- Full restoration
+
+### Stage 4e — reconciliation
+
+- Periodic rebuild
+- Idempotent repeat registration
+- World-transition handling
+- Camp and guild changes
+- New chest handling
+- New camp handling
+- Stale pointer handling
+- Removal-path investigation
+
+### Stage 4f — restart and persistence
+
+- Server restart
+- World reload
+- Rebuild registration state
+- Confirm storage behaviour after restart
+- Determine whether registration is runtime-only or serialised
+
+### Stage 4g — user-facing configuration
+
+- Enable/disable
+- Reconcile interval
+- Diagnostic verbosity
+- Explicit dedicated-server guard
+- Safe defaults
+
+### First usable release gate
+
+The first usable release requires:
+
+- Observable registration effect
+- Exact-pair idempotency
+- Full-plan execution
+- Reconciliation
+- Populated-world stability
+- Restart validation
+- Installation guide
+- Rollback guide
+- Troubleshooting guide
+- Production acceptance plan
+
+---
+
+## 14. Latest evidence paths
+
+```text
+Stage 4b.1:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b1-populated-20260806-062026
+
+Stage 4b.2a:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2a-thread-20260806-064245
+
+Stage 4b.2:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2-retry-20260806-071924
+
+Stage 4c.1d:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1d-metaprobe-20260806-070751
+
+Stage 4c.1e:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1e-role-thread-20260806-073648
+
+Stage 4c.1f:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1f-combined-20260806-075812
+
+Stage 4c.2:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c2-plan-20260806-083809
+
+Stage 4c.3 unarmed:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-unarmed-20260806-095324
+
+Stage 4c.3 armed:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-armed-20260806-100441
+```
+
+---
+
+## 15. Immediate next action
+
+Run the Stage 4c.4 inspection-only observability survey.
+
+Do not patch the mutation path again until the survey identifies a
+credible read-only membership observation surface.
