@@ -26,60 +26,74 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4c.3 — controlled single registration
+Stage 4c.4e — BelongInfo and query parameter layout
 ```
 
-Stage 4c.3 has demonstrated one explicitly armed call to:
+Accepted commit:
 
 ```text
-OnAvailableConcreteModel_ServerInternal
+03e39072695e41a84dec13c5854e924f9c2e0726
 ```
 
-The call was made:
+Accepted candidate identity:
 
-- On the Unreal game thread
-- On a native Linux Palworld dedicated server
-- Against an isolated populated-world clone
-- For one real chest
-- Against one foreign camp storage in the same guild
-- With reflected parameter metadata
-- With a zeroed parameter buffer
-- With a process-lifetime one-shot guard
-- Without crashes or thread violations
-- Without touching production
+```text
+Source SHA256:
+5da6a23b59df2c068711d9f0399b4abeb05ba1ce743f6bb053b1406b1df37537
 
-The isolated server remained stable for 180 seconds after the call.
+Artifact SHA256:
+543db05157c815d95a718f9e1d284684dad7b32b20ea12c9e4e98a7dd634a48c
 
-### Current acceptance boundary
+Build ID:
+c6204f77b8d6cc55197df3701eeb0cecd50c8046
+```
 
-Stage 4c.3 proves that one reflected registration call can complete
-without destabilising the isolated populated dedicated server.
+Accepted runtime evidence:
 
-It does **not** yet prove:
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4e-deep-layout-20260806-121059
+```
 
-- That the target storage retained the foreign chest
-- That gameplay routing changed
-- That the exact pair can be registered repeatedly without duplication
-- That registration survives or must be rebuilt after restart
-- That all 285 planned pairs are safe
-- That stale registrations can be removed
-- That periodic reconciliation is safe
-- That the candidate is ready for production
+### What is currently proven
+
+1. Native NullPrism loading and lifecycle operation on the Linux
+   dedicated server.
+2. Dedicated-server role resolution on the game thread.
+3. Populated-world discovery of camps, guilds, camp storages and item
+   chests.
+4. Deterministic chest-to-camp-to-guild association.
+5. A deterministic, read-only cross-camp registration plan.
+6. Guarded execution of exactly one registration call in an isolated,
+   armed test.
+7. Deterministic selection of the planner guild's aggregate
+   `UPalGuildItemStorage` through
+   `ItemContainer.BelongInfo.GroupId`.
+8. Read-only aggregate `ItemSlotArray` discovery with 54 object slots.
+9. Exact reflected parameter layouts for the relevant item-container
+   manager queries.
+
+### What is not yet proven
+
+1. The exact readable identity and item/count fields on
+   `UPalItemSlot`.
+2. A reliable semantic before/after fingerprint for registration.
+3. That the one registration call changes aggregate guild-storage
+   membership or item visibility.
+4. Registration idempotency.
+5. Removal behavior.
+6. Full-plan registration.
+7. Reconciliation after chest, camp or guild changes.
+8. Persistence across restart.
+9. Player-visible integrated crafting or storage behavior.
 
 ### Next stage
 
 ```text
-Stage 4c.4 — registration-effect observability
+Stage 4c.4f — read-only UPalItemSlot metadata and aggregate fingerprint probe
 ```
 
-The next task is to identify a readable property or query on the selected
-storage module that exposes whether the selected foreign chest is
-present before and after registration.
-
-No duplicate call or full-plan mutation should be attempted until the
-effect can be observed.
-
----
+The next stage must remain unarmed, add no `ProcessEvent` call, and
+invoke no reflected query function.
 
 ## 2. Repository and branch strategy
 
@@ -2378,60 +2392,106 @@ unchanged.
 
 ---
 
-## 20. Immediate next action
+## 20. Stage 4c.4f survey — slot-object and manager-map observability
+
+### Survey status
+
+Inspection-only survey completed on:
+
+```text
+03e39072695e41a84dec13c5854e924f9c2e0726
+```
+
+No source, build, runtime, save or production state was modified.
+
+### Findings
+
+The NullPrism SDK exposes the read-only object extraction API:
+
+```text
+FObjectPropertyBase::GetObjectPropertyValue(
+    const void* PropertyValueAddress
+)
+```
+
+The PalServer binary exposes the concrete slot UObject class:
+
+```text
+UPalItemSlot
+```
+
+Candidate reflected slot properties include:
+
+```text
+ItemSlotId
+SlotId
+ContainerId
+ItemContainerId
+ItemId
+StaticItemId
+ItemNum
+ItemCount
+StackCount
+ItemData
+```
+
+Candidate reflected slot queries include:
+
+```text
+GetSlotId
+GetContainerId
+GetItemId
+GetItemStackCount
+GetStackCount
+GetStaticItemData
+```
+
+The survey did not surface a sufficiently clear public
+`FMapProperty` key/value accessor or `FScriptMapHelper` construction
+surface in the searched NullPrism headers. Direct iteration of
+`ItemContainerMap_InServer` must therefore remain deferred rather than
+being guessed.
+
+### Accepted interpretation
+
+The safest next observability surface is the selected guild aggregate's
+54-element `ItemSlotArray`.
+
+The next runtime probe should:
+
+1. Extract each array object through
+   `FObjectPropertyBase::GetObjectPropertyValue`.
+2. Validate each non-null object against `UPalItemSlot`.
+3. Report candidate property metadata.
+4. Report candidate function parameter layouts without invoking them.
+5. Produce a deterministic aggregate slot-object fingerprint using only
+   safe object identity, null/non-null state and validated primitive or
+   fixed-size reflected fields.
+6. Avoid manager-map iteration until the exact API is confirmed.
+
+---
+
+## 21. Immediate next action
 
 Run Stage 4c.4f:
 
 ```text
-slot-object and manager-map observability survey
+read-only UPalItemSlot metadata and aggregate fingerprint probe
 ```
 
 Required work:
 
-1. Identify the exact item-slot UObject class.
-2. Identify readable slot ID, item ID and stack/count properties.
-3. Confirm object-array element extraction through
+1. Select the planner guild's aggregate `UPalItemContainer` through
+   `BelongInfo.GroupId`.
+2. Traverse its 54-element `ItemSlotArray` read-only.
+3. Extract slot objects with
    `FObjectPropertyBase::GetObjectPropertyValue`.
-4. Confirm exact `FMapProperty` key/value accessors.
-5. Confirm exact `FScriptMapHelper` construction and iteration APIs.
-6. Identify the manager-map key/value classes or structs.
-7. Keep all reflected functions uncalled.
-8. Keep registration, removal and reconciliation disabled.
-
-Run Stage 4c.4e:
-
-```text
-deep container-layout and parameter-layout survey
-```
-
-Required work:
-
-1. Inspect `FStructProperty` and nested-struct reflection APIs.
-2. Inspect `BelongInfo` candidate member names.
-3. Inspect `FMapProperty` key and value metadata APIs.
-4. Inspect `ItemContainerMap_InServer` key/value types.
-5. Inspect the exact offset, size, flags and property type of every
-   `GetGroupIdByItemContainerId` parameter.
-6. Inspect `ItemSlotArray` inner accepted class.
-7. Keep all query functions uncalled.
-8. Keep registration, removal and reconciliation disabled.
-
-Run Stage 4c.4d:
-
-```text
-guild-storage ownership and aggregate ItemContainer survey
-```
-
-Required work:
-
-1. Confirm the exact UObject outer-chain API.
-2. Identify likely group or guild identifier property names.
-3. Identify reflected collection and query names on the aggregate item
-   container.
-4. Keep registration disabled.
-5. Do not add a second registration call or full-plan mutation.
-
-Run the Stage 4c.4 inspection-only observability survey.
-
-Do not patch the mutation path again until the survey identifies a
-credible read-only membership observation surface.
+4. Confirm the concrete `UPalItemSlot` class.
+5. Inspect candidate slot-property metadata, offsets and sizes.
+6. Inspect candidate slot-query parameter layouts without invoking any
+   function.
+7. Compute a deterministic read-only aggregate fingerprint.
+8. Keep the package unarmed.
+9. Add no `ProcessEvent` call.
+10. Do not perform registration, removal, reconciliation, routing or
+    item transfer.
