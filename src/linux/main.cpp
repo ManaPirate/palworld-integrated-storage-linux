@@ -612,6 +612,7 @@ namespace
     std::atomic_bool g_observability_metadata_reported{false};
     std::atomic_bool g_item_storage_linkage_reported{false};
     std::atomic_bool g_container_query_metadata_reported{false};
+    std::atomic_bool g_deep_layout_metadata_reported{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -3230,6 +3231,961 @@ namespace
         }
     }
 
+
+    struct StructCandidateRead
+    {
+        bool exists{};
+        bool bounds_ok{};
+        bool size_is_16{};
+        std::int32_t offset{-1};
+        std::int32_t size{-1};
+        GuildKey value{};
+    };
+
+    auto guild_key_is_zero(
+        const GuildKey& value
+    ) noexcept -> bool
+    {
+        for (const auto byte : value)
+        {
+            if (byte != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    auto guild_key_hex(
+        const GuildKey& value
+    ) noexcept -> std::array<char, 33>
+    {
+        static constexpr char digits[] =
+            "0123456789abcdef";
+
+        std::array<char, 33> result{};
+
+        for (
+            std::size_t index{};
+            index < value.size();
+            ++index
+        )
+        {
+            result[index * 2] =
+                digits[
+                    (value[index] >> 4) &
+                    0x0f
+                ];
+
+            result[index * 2 + 1] =
+                digits[
+                    value[index] &
+                    0x0f
+                ];
+        }
+
+        result[32] = '\0';
+        return result;
+    }
+
+    auto read_nested_struct_candidate(
+        RC::Unreal::UStruct* definition,
+        void* data,
+        std::int32_t container_size,
+        const RC::Unreal::TCHAR* candidate_name
+    ) noexcept -> StructCandidateRead
+    {
+        StructCandidateRead result{};
+
+        if (
+            definition == nullptr ||
+            data == nullptr ||
+            container_size <= 0
+        )
+        {
+            return result;
+        }
+
+        try
+        {
+            auto* property =
+                definition->GetPropertyByNameInChain(
+                    candidate_name
+                );
+
+            if (property == nullptr)
+            {
+                return result;
+            }
+
+            result.exists = true;
+            result.offset =
+                property->GetOffset_Internal();
+            result.size =
+                property->GetSize();
+
+            if (
+                result.offset < 0 ||
+                result.size <= 0 ||
+                result.offset > container_size ||
+                result.size >
+                    container_size - result.offset
+            )
+            {
+                return result;
+            }
+
+            result.bounds_ok = true;
+
+            if (
+                result.size !=
+                static_cast<std::int32_t>(
+                    sizeof(GuildKey)
+                )
+            )
+            {
+                return result;
+            }
+
+            auto* value_address =
+                property->ContainerPtrToValuePtr<
+                    void
+                >(data);
+
+            if (value_address == nullptr)
+            {
+                return result;
+            }
+
+            result.size_is_16 = true;
+
+            std::memcpy(
+                result.value.data(),
+                value_address,
+                sizeof(GuildKey)
+            );
+
+            return result;
+        }
+        catch (...)
+        {
+            return result;
+        }
+    }
+
+    auto emit_detailed_function_parameters(
+        RC::Unreal::UObject* object,
+        const RC::Unreal::TCHAR* candidate_name,
+        const char* candidate_label,
+        std::uint64_t& functions_found,
+        std::uint64_t& parameter_lines,
+        std::uint64_t& exceptions
+    ) noexcept -> void
+    {
+        if (object == nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "PARAM_FUNCTION candidate=%s exists=0 "
+                "reason=null_object",
+                candidate_label
+            );
+
+            return;
+        }
+
+        try
+        {
+            auto* function =
+                object->GetFunctionByNameInChain(
+                    candidate_name
+                );
+
+            if (function == nullptr)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "PARAM_FUNCTION candidate=%s exists=0",
+                    candidate_label
+                );
+
+                return;
+            }
+
+            ++functions_found;
+
+            std::uint64_t ordinal{};
+
+            for (
+                auto* property :
+                function->ForEachProperty()
+            )
+            {
+                if (
+                    property == nullptr ||
+                    !property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_Parm
+                    )
+                )
+                {
+                    continue;
+                }
+
+                const bool is_return =
+                    property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_ReturnParm
+                    );
+
+                const bool is_object =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(property) != nullptr ||
+                    RC::Unreal::CastField<
+                        RC::Unreal::FWeakObjectProperty
+                    >(property) != nullptr;
+
+                const bool is_struct =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FStructProperty
+                    >(property) != nullptr;
+
+                const bool is_array =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(property) != nullptr;
+
+                const bool is_set =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FSetProperty
+                    >(property) != nullptr;
+
+                const bool is_map =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FMapProperty
+                    >(property) != nullptr;
+
+                const bool is_bool =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FBoolProperty
+                    >(property) != nullptr;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "PARAM_META function=%s ordinal=%llu "
+                    "return=%d offset=%d size=%d "
+                    "element_size=%d object=%d struct=%d "
+                    "array=%d set=%d map=%d bool=%d",
+                    candidate_label,
+                    static_cast<unsigned long long>(
+                        ordinal
+                    ),
+                    is_return ? 1 : 0,
+                    property->GetOffset_Internal(),
+                    property->GetSize(),
+                    property->GetElementSize(),
+                    is_object ? 1 : 0,
+                    is_struct ? 1 : 0,
+                    is_array ? 1 : 0,
+                    is_set ? 1 : 0,
+                    is_map ? 1 : 0,
+                    is_bool ? 1 : 0
+                );
+
+                ++ordinal;
+                ++parameter_lines;
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "PARAM_FUNCTION candidate=%s exists=1 "
+                "parms=%zu parameter_lines=%llu",
+                candidate_label,
+                function->GetParmsSize(),
+                static_cast<unsigned long long>(
+                    ordinal
+                )
+            );
+        }
+        catch (...)
+        {
+            ++exceptions;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "PARAM_FUNCTION candidate=%s exists=0 "
+                "reason=exception",
+                candidate_label
+            );
+        }
+    }
+
+    auto run_read_only_deep_layout_metadata_probe(
+        const GuildKey& selected_guild,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_deep_layout_metadata_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            static auto* guild_storages =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            static auto* item_container_managers =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            guild_storages->clear();
+            item_container_managers->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalItemContainerManager"),
+                *item_container_managers
+            );
+
+            const RC::Unreal::TCHAR*
+                group_candidate_names[] = {
+                    STR("GroupId"),
+                    STR("GroupID"),
+                    STR("GuildId"),
+                    STR("GuildID"),
+                    STR("BelongGroupId")
+                };
+
+            const char* group_candidate_labels[] = {
+                    "GroupId",
+                    "GroupID",
+                    "GuildId",
+                    "GuildID",
+                    "BelongGroupId"
+                };
+
+            const RC::Unreal::TCHAR*
+                container_candidate_names[] = {
+                    STR("ContainerId"),
+                    STR("ContainerID"),
+                    STR("ItemContainerId"),
+                    STR("ItemContainerID")
+                };
+
+            const char* container_candidate_labels[] = {
+                    "ContainerId",
+                    "ContainerID",
+                    "ItemContainerId",
+                    "ItemContainerID"
+                };
+
+            std::uint64_t valid_storages{};
+            std::uint64_t belong_properties{};
+            std::uint64_t belong_structs{};
+            std::uint64_t group_candidates_found{};
+            std::uint64_t group_candidates_16{};
+            std::uint64_t selected_guild_matches{};
+            std::uint64_t selected_storage_matches{};
+            std::uint64_t container_candidates_found{};
+            std::uint64_t container_candidates_16{};
+            std::uint64_t nonzero_container_ids{};
+            std::uint64_t item_slot_arrays{};
+            std::uint64_t item_slot_array_objects{};
+            std::uint64_t total_slots{};
+            std::uint64_t min_slots{};
+            std::uint64_t max_slots{};
+
+            bool have_slot_count{};
+
+            RC::Unreal::UObject*
+                selected_guild_storage{};
+
+            RC::Unreal::UObject*
+                selected_guild_item_container{};
+
+            GuildKey selected_container_id{};
+            bool selected_container_id_found{};
+
+            std::uint64_t storage_index{};
+
+            for (auto* storage : *guild_storages)
+            {
+                if (storage == nullptr)
+                {
+                    continue;
+                }
+
+                ++valid_storages;
+
+                const auto item_container =
+                    read_object_property_candidate(
+                        storage,
+                        STR("ItemContainer")
+                    );
+
+                auto* container =
+                    item_container.value;
+
+                bool storage_matches_selected{};
+                bool storage_has_container_id{};
+                GuildKey storage_container_id{};
+
+                auto* belong_property =
+                    container != nullptr
+                        ? container->
+                            GetPropertyByNameInChain(
+                                STR("BelongInfo")
+                            )
+                        : nullptr;
+
+                if (belong_property != nullptr)
+                {
+                    ++belong_properties;
+                }
+
+                auto* belong_struct_property =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FStructProperty
+                    >(belong_property);
+
+                RC::Unreal::UStruct* belong_definition{};
+                void* belong_data{};
+
+                if (belong_struct_property != nullptr)
+                {
+                    ++belong_structs;
+
+                    belong_definition =
+                        belong_struct_property->
+                            GetStruct().Get();
+
+                    belong_data =
+                        belong_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(container);
+                }
+
+                for (
+                    std::size_t candidate_index{};
+                    candidate_index <
+                        sizeof(group_candidate_names) /
+                        sizeof(group_candidate_names[0]);
+                    ++candidate_index
+                )
+                {
+                    const auto result =
+                        read_nested_struct_candidate(
+                            belong_definition,
+                            belong_data,
+                            belong_property != nullptr
+                                ? belong_property->
+                                    GetSize()
+                                : 0,
+                            group_candidate_names[
+                                candidate_index
+                            ]
+                        );
+
+                    if (result.exists)
+                    {
+                        ++group_candidates_found;
+                    }
+
+                    if (result.size_is_16)
+                    {
+                        ++group_candidates_16;
+
+                        const bool matches =
+                            result.value ==
+                                selected_guild;
+
+                        selected_guild_matches +=
+                            matches ? 1U : 0U;
+
+                        storage_matches_selected =
+                            storage_matches_selected ||
+                            matches;
+
+                        const auto hex =
+                            guild_key_hex(
+                                result.value
+                            );
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "BELONG_MEMBER storage=%llu "
+                            "candidate=%s exists=1 "
+                            "offset=%d size=%d zero=%d "
+                            "selected_guild_match=%d "
+                            "value=%s",
+                            static_cast<
+                                unsigned long long
+                            >(storage_index),
+                            group_candidate_labels[
+                                candidate_index
+                            ],
+                            result.offset,
+                            result.size,
+                            guild_key_is_zero(
+                                result.value
+                            ) ? 1 : 0,
+                            matches ? 1 : 0,
+                            hex.data()
+                        );
+                    }
+                    else
+                    {
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "BELONG_MEMBER storage=%llu "
+                            "candidate=%s exists=%d "
+                            "bounds=%d offset=%d size=%d "
+                            "size16=0",
+                            static_cast<
+                                unsigned long long
+                            >(storage_index),
+                            group_candidate_labels[
+                                candidate_index
+                            ],
+                            result.exists ? 1 : 0,
+                            result.bounds_ok ? 1 : 0,
+                            result.offset,
+                            result.size
+                        );
+                    }
+                }
+
+                for (
+                    std::size_t candidate_index{};
+                    candidate_index <
+                        sizeof(container_candidate_names) /
+                        sizeof(container_candidate_names[0]);
+                    ++candidate_index
+                )
+                {
+                    const auto result =
+                        read_nested_struct_candidate(
+                            belong_definition,
+                            belong_data,
+                            belong_property != nullptr
+                                ? belong_property->
+                                    GetSize()
+                                : 0,
+                            container_candidate_names[
+                                candidate_index
+                            ]
+                        );
+
+                    if (result.exists)
+                    {
+                        ++container_candidates_found;
+                    }
+
+                    if (result.size_is_16)
+                    {
+                        ++container_candidates_16;
+
+                        const bool nonzero =
+                            !guild_key_is_zero(
+                                result.value
+                            );
+
+                        nonzero_container_ids +=
+                            nonzero ? 1U : 0U;
+
+                        if (
+                            nonzero &&
+                            !storage_has_container_id
+                        )
+                        {
+                            storage_has_container_id =
+                                true;
+
+                            storage_container_id =
+                                result.value;
+                        }
+
+                        const auto hex =
+                            guild_key_hex(
+                                result.value
+                            );
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "BELONG_MEMBER storage=%llu "
+                            "candidate=%s exists=1 "
+                            "offset=%d size=%d zero=%d "
+                            "value=%s",
+                            static_cast<
+                                unsigned long long
+                            >(storage_index),
+                            container_candidate_labels[
+                                candidate_index
+                            ],
+                            result.offset,
+                            result.size,
+                            nonzero ? 0 : 1,
+                            hex.data()
+                        );
+                    }
+                    else
+                    {
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "BELONG_MEMBER storage=%llu "
+                            "candidate=%s exists=%d "
+                            "bounds=%d offset=%d size=%d "
+                            "size16=0",
+                            static_cast<
+                                unsigned long long
+                            >(storage_index),
+                            container_candidate_labels[
+                                candidate_index
+                            ],
+                            result.exists ? 1 : 0,
+                            result.bounds_ok ? 1 : 0,
+                            result.offset,
+                            result.size
+                        );
+                    }
+                }
+
+                auto* slot_property =
+                    container != nullptr
+                        ? container->
+                            GetPropertyByNameInChain(
+                                STR("ItemSlotArray")
+                            )
+                        : nullptr;
+
+                auto* slot_array_property =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(slot_property);
+
+                std::int32_t slot_count{-1};
+                bool inner_object{};
+
+                if (slot_array_property != nullptr)
+                {
+                    ++item_slot_arrays;
+
+                    auto* inner =
+                        slot_array_property->GetInner();
+
+                    inner_object =
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FObjectPropertyBase
+                        >(inner) != nullptr ||
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FWeakObjectProperty
+                        >(inner) != nullptr;
+
+                    item_slot_array_objects +=
+                        inner_object ? 1U : 0U;
+
+                    RC::Unreal::
+                        FScriptArrayHelper_InContainer
+                            helper(
+                                slot_array_property,
+                                container
+                            );
+
+                    slot_count = helper.Num();
+
+                    if (slot_count >= 0)
+                    {
+                        total_slots +=
+                            static_cast<
+                                std::uint64_t
+                            >(slot_count);
+
+                        if (!have_slot_count)
+                        {
+                            min_slots =
+                                static_cast<
+                                    std::uint64_t
+                                >(slot_count);
+
+                            max_slots = min_slots;
+                            have_slot_count = true;
+                        }
+                        else
+                        {
+                            const auto count =
+                                static_cast<
+                                    std::uint64_t
+                                >(slot_count);
+
+                            if (count < min_slots)
+                            {
+                                min_slots = count;
+                            }
+
+                            if (count > max_slots)
+                            {
+                                max_slots = count;
+                            }
+                        }
+                    }
+                }
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "BELONG_STORAGE storage=%llu "
+                    "container=%d belong_property=%d "
+                    "belong_struct=%d selected_match=%d "
+                    "container_id=%d slot_array=%d "
+                    "slot_inner_object=%d slot_count=%d",
+                    static_cast<
+                        unsigned long long
+                    >(storage_index),
+                    container != nullptr ? 1 : 0,
+                    belong_property != nullptr ? 1 : 0,
+                    belong_struct_property != nullptr
+                        ? 1
+                        : 0,
+                    storage_matches_selected ? 1 : 0,
+                    storage_has_container_id ? 1 : 0,
+                    slot_array_property != nullptr ? 1 : 0,
+                    inner_object ? 1 : 0,
+                    slot_count
+                );
+
+                if (storage_matches_selected)
+                {
+                    ++selected_storage_matches;
+
+                    if (
+                        selected_guild_storage ==
+                        nullptr
+                    )
+                    {
+                        selected_guild_storage =
+                            storage;
+
+                        selected_guild_item_container =
+                            container;
+
+                        if (storage_has_container_id)
+                        {
+                            selected_container_id =
+                                storage_container_id;
+
+                            selected_container_id_found =
+                                true;
+                        }
+                    }
+                }
+
+                ++storage_index;
+            }
+
+            RC::Unreal::UObject*
+                item_container_manager{};
+
+            for (
+                auto* candidate :
+                *item_container_managers
+            )
+            {
+                if (candidate != nullptr)
+                {
+                    item_container_manager =
+                        candidate;
+                    break;
+                }
+            }
+
+            std::uint64_t functions_found{};
+            std::uint64_t parameter_lines{};
+            std::uint64_t parameter_exceptions{};
+
+            emit_detailed_function_parameters(
+                item_container_manager,
+                STR("GetGroupIdByItemContainerId"),
+                "GetGroupIdByItemContainerId",
+                functions_found,
+                parameter_lines,
+                parameter_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                item_container_manager,
+                STR("GetGroupIdByItemSlotId"),
+                "GetGroupIdByItemSlotId",
+                functions_found,
+                parameter_lines,
+                parameter_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                item_container_manager,
+                STR("GetContainer"),
+                "GetContainer",
+                functions_found,
+                parameter_lines,
+                parameter_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                item_container_manager,
+                STR("TryGetContainer"),
+                "TryGetContainer",
+                functions_found,
+                parameter_lines,
+                parameter_exceptions
+            );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "DEEP_LAYOUT guild_storage_objects=%zu "
+                "valid_storages=%llu "
+                "belong_properties=%llu "
+                "belong_structs=%llu "
+                "group_candidates_found=%llu "
+                "group_candidates_16=%llu "
+                "selected_guild_matches=%llu "
+                "selected_storage_matches=%llu "
+                "selected_storage=%d "
+                "selected_item_container=%d "
+                "selected_container_id=%d "
+                "container_candidates_found=%llu "
+                "container_candidates_16=%llu "
+                "nonzero_container_ids=%llu "
+                "item_slot_arrays=%llu "
+                "item_slot_array_objects=%llu "
+                "total_slots=%llu min_slots=%llu "
+                "max_slots=%llu manager_objects=%zu "
+                "manager=%d functions_found=%llu "
+                "parameter_lines=%llu "
+                "parameter_exceptions=%llu",
+                guild_storages->size(),
+                static_cast<unsigned long long>(
+                    valid_storages
+                ),
+                static_cast<unsigned long long>(
+                    belong_properties
+                ),
+                static_cast<unsigned long long>(
+                    belong_structs
+                ),
+                static_cast<unsigned long long>(
+                    group_candidates_found
+                ),
+                static_cast<unsigned long long>(
+                    group_candidates_16
+                ),
+                static_cast<unsigned long long>(
+                    selected_guild_matches
+                ),
+                static_cast<unsigned long long>(
+                    selected_storage_matches
+                ),
+                selected_guild_storage != nullptr
+                    ? 1
+                    : 0,
+                selected_guild_item_container != nullptr
+                    ? 1
+                    : 0,
+                selected_container_id_found ? 1 : 0,
+                static_cast<unsigned long long>(
+                    container_candidates_found
+                ),
+                static_cast<unsigned long long>(
+                    container_candidates_16
+                ),
+                static_cast<unsigned long long>(
+                    nonzero_container_ids
+                ),
+                static_cast<unsigned long long>(
+                    item_slot_arrays
+                ),
+                static_cast<unsigned long long>(
+                    item_slot_array_objects
+                ),
+                static_cast<unsigned long long>(
+                    total_slots
+                ),
+                static_cast<unsigned long long>(
+                    min_slots
+                ),
+                static_cast<unsigned long long>(
+                    max_slots
+                ),
+                item_container_managers->size(),
+                item_container_manager != nullptr
+                    ? 1
+                    : 0,
+                static_cast<unsigned long long>(
+                    functions_found
+                ),
+                static_cast<unsigned long long>(
+                    parameter_lines
+                ),
+                static_cast<unsigned long long>(
+                    parameter_exceptions
+                )
+            );
+
+            if (
+                valid_storages > 0 &&
+                belong_structs == valid_storages &&
+                item_slot_arrays == valid_storages &&
+                item_container_manager != nullptr &&
+                parameter_exceptions == 0
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "DEEP_LAYOUT RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "DEEP_LAYOUT RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "DEEP_LAYOUT RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* chest_camp,
@@ -4106,6 +5062,11 @@ namespace
             plan_complete
         );
 
+        run_read_only_deep_layout_metadata_probe(
+            registration_probe_guild,
+            plan_complete
+        );
+
         run_controlled_single_registration(
             registration_probe_chest,
             registration_probe_chest_camp,
@@ -4318,12 +5279,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4d-container-query-metadata");
+                STR("0.1.0-linux-stage4c.4e-belong-query-layout");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only aggregate-container "
-                    "query metadata probe with guarded registration."
+                    "Linux dedicated-server read-only BelongInfo and "
+                    "query parameter layout probe."
                 );
 
             ModAuthors =

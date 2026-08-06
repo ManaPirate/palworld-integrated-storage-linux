@@ -245,7 +245,7 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4d adds a read-only aggregate ItemContainer and manager query-metadata survey.
+Stage 4c.4e adds a read-only BelongInfo, ItemSlotArray and query-parameter layout survey.
 The normal staged package remains unarmed. The survey adds no ProcessEvent call and does not perform registration, removal, reconciliation, routing or item transfer.
 EOF
 

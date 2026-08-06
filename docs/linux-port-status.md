@@ -2207,7 +2207,196 @@ unchanged.
 
 ---
 
-## 19. Immediate next action
+## 19. Stage 4c.4e — BelongInfo and query parameter layout
+
+### Goal
+
+Map the selected planner guild to its `UPalGuildItemStorage`, inspect the
+aggregate item-slot array, and validate every reflected manager-query
+parameter layout without invoking any query.
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4c.4e-belong-query-layout
+
+Source SHA256:
+5da6a23b59df2c068711d9f0399b4abeb05ba1ce743f6bb053b1406b1df37537
+
+Artifact SHA256:
+543db05157c815d95a718f9e1d284684dad7b32b20ea12c9e4e98a7dd634a48c
+
+Build ID:
+c6204f77b8d6cc55197df3701eeb0cecd50c8046
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4e-deep-layout-20260806-121059
+```
+
+Results:
+
+```text
+DEEP_LAYOUT PASS:       1
+DEEP_LAYOUT INCOMPLETE: 0
+DEEP_LAYOUT EXCEPTION:  0
+Registration called:    0
+Gate disabled:          1
+Invalid thread:         0
+Crash markers:          0
+```
+
+All nine `UPalGuildItemStorage.ItemContainer` objects exposed:
+
+```text
+BelongInfo
+    struct: yes
+
+BelongInfo.GroupId
+    offset: 8
+    size:   16
+
+ItemSlotArray
+    array:        yes
+    inner object: yes
+    slot count:   54
+```
+
+Exactly one guild-storage object matched the planner-selected guild:
+
+```text
+Selected guild:
+20f979c33446e7f1f8cea19499aad71a
+
+Matching storage index:
+1
+
+Selected storage matches:
+1
+```
+
+`GroupId` and `GroupID` resolve to the same reflected member, so the two
+reported matches represent aliases for one 16-byte field rather than two
+different fields.
+
+No tested container-ID member existed inside `BelongInfo`.
+
+The exact reflected query layouts are:
+
+```text
+GetGroupIdByItemContainerId
+    parameter bytes: 40
+
+    ordinal 0:
+        input UObject*
+        offset 0
+        size 8
+
+    ordinal 1:
+        input struct
+        offset 8
+        size 16
+
+    ordinal 2:
+        return struct
+        offset 24
+        size 16
+
+GetGroupIdByItemSlotId
+    parameter bytes: 44
+
+    ordinal 0:
+        input UObject*
+        offset 0
+        size 8
+
+    ordinal 1:
+        input struct
+        offset 8
+        size 20
+
+    ordinal 2:
+        return struct
+        offset 28
+        size 16
+
+GetContainer
+    parameter bytes: 24
+
+    ordinal 0:
+        input struct
+        offset 0
+        size 16
+
+    ordinal 1:
+        return UObject*
+        offset 16
+        size 8
+
+TryGetContainer
+    parameter bytes: 25
+
+    ordinal 0:
+        input struct
+        offset 0
+        size 16
+
+    ordinal 1:
+        input UObject*
+        offset 16
+        size 8
+
+    ordinal 2:
+        return bool
+        offset 24
+        size 1
+```
+
+### Accepted conclusion
+
+The correct guild aggregate can now be selected deterministically without
+calling a manager query:
+
+```text
+planner selected guild
+    -> UPalGuildItemStorage.ItemContainer
+    -> BelongInfo.GroupId
+```
+
+The next semantic-effect probe should observe the matched aggregate, but
+first the 54 `ItemSlotArray` object elements and
+`ItemContainerMap_InServer` key/value layouts must be characterised
+read-only.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 20. Immediate next action
+
+Run Stage 4c.4f:
+
+```text
+slot-object and manager-map observability survey
+```
+
+Required work:
+
+1. Identify the exact item-slot UObject class.
+2. Identify readable slot ID, item ID and stack/count properties.
+3. Confirm object-array element extraction through
+   `FObjectPropertyBase::GetObjectPropertyValue`.
+4. Confirm exact `FMapProperty` key/value accessors.
+5. Confirm exact `FScriptMapHelper` construction and iteration APIs.
+6. Identify the manager-map key/value classes or structs.
+7. Keep all reflected functions uncalled.
+8. Keep registration, removal and reconciliation disabled.
 
 Run Stage 4c.4e:
 
