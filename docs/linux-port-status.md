@@ -26,32 +26,32 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4c.4e — BelongInfo and query parameter layout
+Stage 4c.4f — read-only UPalItemSlot metadata and aggregate fingerprint
 ```
 
-Accepted commit:
+Accepted commit baseline:
 
 ```text
-03e39072695e41a84dec13c5854e924f9c2e0726
+f5005b44a8e5d1b120e102259c5c47e38e7a0e60
 ```
 
 Accepted candidate identity:
 
 ```text
 Source SHA256:
-5da6a23b59df2c068711d9f0399b4abeb05ba1ce743f6bb053b1406b1df37537
+73674561264974031835d9e3eb26396908d93602629038f7f4932ce723e3bb5d
 
 Artifact SHA256:
-543db05157c815d95a718f9e1d284684dad7b32b20ea12c9e4e98a7dd634a48c
+37f9b9840ecea03d091e1f35da5fd92b515dd0c070d8e0c4878568662aed0d87
 
 Build ID:
-c6204f77b8d6cc55197df3701eeb0cecd50c8046
+9151a143ad76fbb0de356807b7f8c023040cc65e
 ```
 
 Accepted runtime evidence:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4e-deep-layout-20260806-121059
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4f-slot-fingerprint-20260806-125800
 ```
 
 ### What is currently proven
@@ -68,32 +68,43 @@ Accepted runtime evidence:
 7. Deterministic selection of the planner guild's aggregate
    `UPalGuildItemStorage` through
    `ItemContainer.BelongInfo.GroupId`.
-8. Read-only aggregate `ItemSlotArray` discovery with 54 object slots.
-9. Exact reflected parameter layouts for the relevant item-container
-   manager queries.
+8. Read-only extraction of all 54 aggregate slot objects through
+   `FObjectPropertyBase::GetObjectPropertyValue`.
+9. All 54 aggregate slot objects are non-null and validate as both the
+   array's accepted class and `/Script/Pal.PalItemSlot`.
+10. `UPalItemSlot.ContainerId` is a 16-byte struct at offset 284.
+11. `UPalItemSlot.ItemId` is a 40-byte struct at offset 300.
+12. `UPalItemSlot.StackCount` is a 4-byte numeric field at offset 340.
+13. `GetSlotId`, `GetItemId`, and `GetStackCount` exist with return sizes
+    20, 40, and 4 bytes respectively.
+14. A deterministic structural fingerprint and an intra-process content
+    fingerprint can be produced without invoking a reflected function.
 
 ### What is not yet proven
 
-1. The exact readable identity and item/count fields on
-   `UPalItemSlot`.
-2. A reliable semantic before/after fingerprint for registration.
-3. That the one registration call changes aggregate guild-storage
-   membership or item visibility.
-4. Registration idempotency.
-5. Removal behavior.
-6. Full-plan registration.
-7. Reconciliation after chest, camp or guild changes.
-8. Persistence across restart.
-9. Player-visible integrated crafting or storage behavior.
+1. The nested field layout of the 16-byte `ContainerId`.
+2. The nested field layout of the 40-byte `ItemId`.
+3. The nested field layout of the 20-byte slot ID returned by
+   `GetSlotId`.
+4. A content fingerprint that includes actual item identity rather than
+   only container identity and stack count.
+5. That the one registration call changes aggregate guild-storage
+   membership, item identity, or item visibility.
+6. Registration idempotency.
+7. Removal behavior.
+8. Full-plan registration.
+9. Reconciliation after chest, camp or guild changes.
+10. Persistence across restart.
+11. Player-visible integrated crafting or storage behavior.
 
 ### Next stage
 
 ```text
-Stage 4c.4f — read-only UPalItemSlot metadata and aggregate fingerprint probe
+Stage 4c.4g — read-only nested slot-identity layout survey
 ```
 
-The next stage must remain unarmed, add no `ProcessEvent` call, and
-invoke no reflected query function.
+The next stage must remain inspection-only, modify no source, invoke no
+reflected function, and perform no runtime mutation.
 
 ## 2. Repository and branch strategy
 
@@ -2471,27 +2482,170 @@ The next runtime probe should:
 
 ---
 
-## 21. Immediate next action
+## 21. Stage 4c.4f — UPalItemSlot metadata and aggregate fingerprint
 
-Run Stage 4c.4f:
+### Goal
+
+Traverse the selected guild aggregate's `ItemSlotArray`, validate every
+slot object, map safe reflected slot metadata, and produce read-only
+fingerprints without invoking any reflected slot function.
+
+### Candidate identity
 
 ```text
-read-only UPalItemSlot metadata and aggregate fingerprint probe
+Version:
+0.1.0-linux-stage4c.4f-slot-fingerprint
+
+Source SHA256:
+73674561264974031835d9e3eb26396908d93602629038f7f4932ce723e3bb5d
+
+Artifact SHA256:
+37f9b9840ecea03d091e1f35da5fd92b515dd0c070d8e0c4878568662aed0d87
+
+Build ID:
+9151a143ad76fbb0de356807b7f8c023040cc65e
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4f-slot-fingerprint-20260806-125800
+```
+
+Results:
+
+```text
+SLOT_FINGERPRINT PASS:       1
+SLOT_FINGERPRINT INCOMPLETE: 0
+SLOT_FINGERPRINT EXCEPTION:  0
+Registration called:         0
+Gate disabled:               1
+Invalid thread:              0
+Crash markers:               0
+```
+
+The selected aggregate exposed:
+
+```text
+Slot count:
+54
+
+Non-null slots:
+54
+
+Accepted-array-class matches:
+54
+
+UPalItemSlot matches:
+54
+```
+
+Every slot object produced the same safe-read shape:
+
+```text
+Readable candidate fields:
+3
+
+Numeric fields:
+1
+
+Fixed-size fields:
+2
+```
+
+The unique reflected slot fields discovered were:
+
+```text
+ContainerId
+    kind:   struct
+    offset: 284
+    size:   16
+
+ItemId
+    kind:   struct
+    offset: 300
+    size:   40
+
+StackCount
+    kind:   numeric
+    offset: 340
+    size:   4
+```
+
+`ContainerID` aliases `ContainerId`, and `ItemID` aliases `ItemId`.
+These aliases account for the five reported property hits while
+representing only three unique fields.
+
+The reflected query metadata was:
+
+```text
+GetSlotId
+    return: struct
+    size:   20
+
+GetItemId
+    return: struct
+    size:   40
+
+GetStackCount
+    return: numeric
+    size:   4
+```
+
+No reflected slot query was invoked.
+
+Fingerprints:
+
+```text
+Structural:
+20fe26a215ff09e6
+
+Intra-process content:
+64202cdd66241928
+
+Cross-restart stability claimed:
+no
+```
+
+### Accepted interpretation
+
+The aggregate slot objects are a viable semantic-effect observation
+surface.
+
+The current content fingerprint safely includes slot structure,
+container identity, and stack count. It does not yet include the 40-byte
+`ItemId`, because Stage 4c.4f deliberately refused to hash an unknown
+large struct.
+
+The nested layouts of `ContainerId`, `ItemId`, and the 20-byte slot ID
+must therefore be mapped before a registration before/after comparison
+can claim to observe actual item identity.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 22. Immediate next action
+
+Run Stage 4c.4g:
+
+```text
+read-only nested slot-identity layout survey
 ```
 
 Required work:
 
-1. Select the planner guild's aggregate `UPalItemContainer` through
-   `BelongInfo.GroupId`.
-2. Traverse its 54-element `ItemSlotArray` read-only.
-3. Extract slot objects with
-   `FObjectPropertyBase::GetObjectPropertyValue`.
-4. Confirm the concrete `UPalItemSlot` class.
-5. Inspect candidate slot-property metadata, offsets and sizes.
-6. Inspect candidate slot-query parameter layouts without invoking any
-   function.
-7. Compute a deterministic read-only aggregate fingerprint.
-8. Keep the package unarmed.
-9. Add no `ProcessEvent` call.
-10. Do not perform registration, removal, reconciliation, routing or
-    item transfer.
+1. Identify the exact reflected struct classes corresponding to the
+   16-byte `ContainerId`, 40-byte `ItemId`, and 20-byte slot ID.
+2. Identify likely nested member names for each struct.
+3. Confirm safe nested-struct metadata APIs in NullPrism.
+4. Inspect field-iteration APIs without using `FName::ToString`.
+5. Identify stable primitive, name, GUID, and fixed-size subfields that
+   can form an item-identity fingerprint.
+6. Keep all reflected functions uncalled.
+7. Add no `ProcessEvent` call.
+8. Do not patch, build, start a server, alter a save, or touch
+   production.

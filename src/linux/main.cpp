@@ -613,6 +613,7 @@ namespace
     std::atomic_bool g_item_storage_linkage_reported{false};
     std::atomic_bool g_container_query_metadata_reported{false};
     std::atomic_bool g_deep_layout_metadata_reported{false};
+    std::atomic_bool g_slot_fingerprint_reported{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -4186,6 +4187,1046 @@ namespace
         }
     }
 
+
+    constexpr std::uint64_t k_slot_fnv_offset{
+        1469598103934665603ULL
+    };
+
+    constexpr std::uint64_t k_slot_fnv_prime{
+        1099511628211ULL
+    };
+
+    auto slot_hash_byte(
+        std::uint64_t& state,
+        std::uint8_t value
+    ) noexcept -> void
+    {
+        state ^= value;
+        state *= k_slot_fnv_prime;
+    }
+
+    auto slot_hash_bytes(
+        std::uint64_t& state,
+        const void* data,
+        std::size_t size
+    ) noexcept -> void
+    {
+        if (data == nullptr)
+        {
+            slot_hash_byte(state, 0xff);
+            return;
+        }
+
+        const auto* bytes =
+            static_cast<const std::uint8_t*>(
+                data
+            );
+
+        for (std::size_t index{}; index < size; ++index)
+        {
+            slot_hash_byte(state, bytes[index]);
+        }
+    }
+
+    auto slot_hash_u64(
+        std::uint64_t& state,
+        std::uint64_t value
+    ) noexcept -> void
+    {
+        for (std::size_t index{}; index < 8; ++index)
+        {
+            slot_hash_byte(
+                state,
+                static_cast<std::uint8_t>(
+                    (value >> (index * 8)) & 0xff
+                )
+            );
+        }
+    }
+
+    auto slot_property_kind(
+        RC::Unreal::FProperty* property
+    ) noexcept -> const char*
+    {
+        if (property == nullptr)
+        {
+            return "missing";
+        }
+
+        if (
+            RC::Unreal::CastField<
+                RC::Unreal::FNumericProperty
+            >(property) != nullptr
+        )
+        {
+            return "numeric";
+        }
+
+        if (
+            RC::Unreal::CastField<
+                RC::Unreal::FBoolProperty
+            >(property) != nullptr
+        )
+        {
+            return "bool";
+        }
+
+        if (
+            RC::Unreal::CastField<
+                RC::Unreal::FNameProperty
+            >(property) != nullptr
+        )
+        {
+            return "name";
+        }
+
+        if (
+            RC::Unreal::CastField<
+                RC::Unreal::FStructProperty
+            >(property) != nullptr
+        )
+        {
+            return "struct";
+        }
+
+        if (
+            RC::Unreal::CastField<
+                RC::Unreal::FObjectPropertyBase
+            >(property) != nullptr
+        )
+        {
+            return "object";
+        }
+
+        return "other";
+    }
+
+    auto run_read_only_slot_fingerprint_probe(
+        const GuildKey& selected_guild,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_slot_fingerprint_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            static auto* guild_storages =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            guild_storages->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            auto* pal_item_slot_class =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UClass*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR("/Script/Pal.PalItemSlot")
+                    );
+
+            RC::Unreal::UObject*
+                selected_item_container{};
+
+            std::uint64_t valid_storages{};
+            std::uint64_t selected_storage_matches{};
+            std::uint64_t selection_exceptions{};
+
+            for (auto* storage : *guild_storages)
+            {
+                if (storage == nullptr)
+                {
+                    continue;
+                }
+
+                ++valid_storages;
+
+                try
+                {
+                    const auto item_container =
+                        read_object_property_candidate(
+                            storage,
+                            STR("ItemContainer")
+                        );
+
+                    auto* container =
+                        item_container.value;
+
+                    if (container == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* belong_property =
+                        container->
+                            GetPropertyByNameInChain(
+                                STR("BelongInfo")
+                            );
+
+                    auto* belong_struct_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FStructProperty
+                        >(belong_property);
+
+                    if (
+                        belong_property == nullptr ||
+                        belong_struct_property == nullptr
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* belong_definition =
+                        belong_struct_property->
+                            GetStruct().Get();
+
+                    auto* belong_data =
+                        belong_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(container);
+
+                    const auto group_id =
+                        read_nested_struct_candidate(
+                            belong_definition,
+                            belong_data,
+                            belong_property->GetSize(),
+                            STR("GroupId")
+                        );
+
+                    if (
+                        group_id.size_is_16 &&
+                        group_id.value ==
+                            selected_guild
+                    )
+                    {
+                        ++selected_storage_matches;
+
+                        if (
+                            selected_item_container ==
+                            nullptr
+                        )
+                        {
+                            selected_item_container =
+                                container;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                    ++selection_exceptions;
+                }
+            }
+
+            auto* slot_property =
+                selected_item_container != nullptr
+                    ? selected_item_container->
+                        GetPropertyByNameInChain(
+                            STR("ItemSlotArray")
+                        )
+                    : nullptr;
+
+            auto* slot_array_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FArrayProperty
+                >(slot_property);
+
+            auto* slot_inner_property =
+                slot_array_property != nullptr
+                    ? slot_array_property->GetInner()
+                    : nullptr;
+
+            auto* slot_object_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FObjectPropertyBase
+                >(slot_inner_property);
+
+            auto* accepted_slot_class =
+                slot_object_property != nullptr
+                    ? slot_object_property->
+                        GetPropertyClass().Get()
+                    : nullptr;
+
+            const RC::Unreal::TCHAR*
+                candidate_names[] = {
+                    STR("ItemSlotId"),
+                    STR("SlotId"),
+                    STR("SlotID"),
+                    STR("ContainerId"),
+                    STR("ContainerID"),
+                    STR("ItemContainerId"),
+                    STR("ItemContainerID"),
+                    STR("ItemId"),
+                    STR("ItemID"),
+                    STR("StaticItemId"),
+                    STR("StaticItemID"),
+                    STR("ItemNum"),
+                    STR("ItemCount"),
+                    STR("StackCount"),
+                    STR("Count"),
+                    STR("Amount"),
+                    STR("ItemData")
+                };
+
+            const char* candidate_labels[] = {
+                    "ItemSlotId",
+                    "SlotId",
+                    "SlotID",
+                    "ContainerId",
+                    "ContainerID",
+                    "ItemContainerId",
+                    "ItemContainerID",
+                    "ItemId",
+                    "ItemID",
+                    "StaticItemId",
+                    "StaticItemID",
+                    "ItemNum",
+                    "ItemCount",
+                    "StackCount",
+                    "Count",
+                    "Amount",
+                    "ItemData"
+                };
+
+            constexpr std::size_t candidate_count =
+                sizeof(candidate_names) /
+                sizeof(candidate_names[0]);
+
+            std::uint64_t candidate_exists[
+                candidate_count
+            ]{};
+
+            std::uint64_t candidate_readable[
+                candidate_count
+            ]{};
+
+            std::int32_t slot_count{-1};
+            std::uint64_t nonnull_slots{};
+            std::uint64_t accepted_class_matches{};
+            std::uint64_t pal_slot_class_matches{};
+            std::uint64_t slot_exceptions{};
+            std::uint64_t property_exceptions{};
+            std::uint64_t properties_found{};
+            std::uint64_t functions_found{};
+            std::uint64_t function_parameter_lines{};
+            std::uint64_t function_exceptions{};
+
+            std::uint64_t structural_fingerprint{
+                k_slot_fnv_offset
+            };
+
+            std::uint64_t content_fingerprint{
+                k_slot_fnv_offset
+            };
+
+            slot_hash_bytes(
+                structural_fingerprint,
+                selected_guild.data(),
+                selected_guild.size()
+            );
+
+            slot_hash_bytes(
+                content_fingerprint,
+                selected_guild.data(),
+                selected_guild.size()
+            );
+
+            RC::Unreal::UObject*
+                first_valid_slot{};
+
+            if (
+                slot_array_property != nullptr &&
+                slot_object_property != nullptr &&
+                selected_item_container != nullptr
+            )
+            {
+                RC::Unreal::
+                    FScriptArrayHelper_InContainer
+                        helper(
+                            slot_array_property,
+                            selected_item_container
+                        );
+
+                slot_count = helper.Num();
+
+                slot_hash_u64(
+                    structural_fingerprint,
+                    static_cast<std::uint64_t>(
+                        slot_count > 0
+                            ? slot_count
+                            : 0
+                    )
+                );
+
+                slot_hash_u64(
+                    content_fingerprint,
+                    static_cast<std::uint64_t>(
+                        slot_count > 0
+                            ? slot_count
+                            : 0
+                    )
+                );
+
+                for (
+                    std::int32_t slot_index{};
+                    slot_index < slot_count;
+                    ++slot_index
+                )
+                {
+                    try
+                    {
+                        auto* element_address =
+                            helper.GetRawPtr(
+                                slot_index
+                            );
+
+                        auto* slot =
+                            slot_object_property->
+                                GetObjectPropertyValue(
+                                    element_address
+                                );
+
+                        const bool nonnull =
+                            slot != nullptr;
+
+                        const bool accepted_match =
+                            nonnull &&
+                            accepted_slot_class !=
+                                nullptr &&
+                            slot->IsA(
+                                accepted_slot_class
+                            );
+
+                        const bool pal_slot_match =
+                            nonnull &&
+                            pal_item_slot_class !=
+                                nullptr &&
+                            slot->IsA(
+                                pal_item_slot_class
+                            );
+
+                        nonnull_slots +=
+                            nonnull ? 1U : 0U;
+
+                        accepted_class_matches +=
+                            accepted_match ? 1U : 0U;
+
+                        pal_slot_class_matches +=
+                            pal_slot_match ? 1U : 0U;
+
+                        slot_hash_u64(
+                            structural_fingerprint,
+                            static_cast<
+                                std::uint64_t
+                            >(slot_index)
+                        );
+
+                        slot_hash_byte(
+                            structural_fingerprint,
+                            nonnull ? 1 : 0
+                        );
+
+                        slot_hash_byte(
+                            structural_fingerprint,
+                            accepted_match ? 1 : 0
+                        );
+
+                        slot_hash_byte(
+                            structural_fingerprint,
+                            pal_slot_match ? 1 : 0
+                        );
+
+                        slot_hash_u64(
+                            content_fingerprint,
+                            static_cast<
+                                std::uint64_t
+                            >(slot_index)
+                        );
+
+                        slot_hash_byte(
+                            content_fingerprint,
+                            nonnull ? 1 : 0
+                        );
+
+                        slot_hash_byte(
+                            content_fingerprint,
+                            accepted_match ? 1 : 0
+                        );
+
+                        slot_hash_byte(
+                            content_fingerprint,
+                            pal_slot_match ? 1 : 0
+                        );
+
+                        std::uint64_t fields_read{};
+                        std::uint64_t numeric_fields{};
+                        std::uint64_t fixed_fields{};
+                        std::uint64_t nonnull_object_fields{};
+
+                        if (
+                            slot != nullptr &&
+                            first_valid_slot == nullptr
+                        )
+                        {
+                            first_valid_slot = slot;
+                        }
+
+                        if (slot != nullptr)
+                        {
+                            for (
+                                std::size_t
+                                    candidate_index{};
+                                candidate_index <
+                                    candidate_count;
+                                ++candidate_index
+                            )
+                            {
+                                auto* property =
+                                    slot->
+                                        GetPropertyByNameInChain(
+                                            candidate_names[
+                                                candidate_index
+                                            ]
+                                        );
+
+                                if (property == nullptr)
+                                {
+                                    continue;
+                                }
+
+                                ++candidate_exists[
+                                    candidate_index
+                                ];
+
+                                auto* value_address =
+                                    property->
+                                        ContainerPtrToValuePtr<
+                                            void
+                                        >(slot);
+
+                                const auto property_size =
+                                    property->GetSize();
+
+                                slot_hash_u64(
+                                    structural_fingerprint,
+                                    candidate_index
+                                );
+
+                                slot_hash_u64(
+                                    structural_fingerprint,
+                                    static_cast<
+                                        std::uint64_t
+                                    >(
+                                        property_size > 0
+                                            ? property_size
+                                            : 0
+                                    )
+                                );
+
+                                auto* numeric_property =
+                                    RC::Unreal::CastField<
+                                        RC::Unreal::
+                                            FNumericProperty
+                                    >(property);
+
+                                auto* bool_property =
+                                    RC::Unreal::CastField<
+                                        RC::Unreal::
+                                            FBoolProperty
+                                    >(property);
+
+                                auto* name_property =
+                                    RC::Unreal::CastField<
+                                        RC::Unreal::
+                                            FNameProperty
+                                    >(property);
+
+                                auto* struct_property =
+                                    RC::Unreal::CastField<
+                                        RC::Unreal::
+                                            FStructProperty
+                                    >(property);
+
+                                auto* object_property =
+                                    RC::Unreal::CastField<
+                                        RC::Unreal::
+                                            FObjectPropertyBase
+                                    >(property);
+
+                                if (
+                                    numeric_property !=
+                                        nullptr &&
+                                    value_address !=
+                                        nullptr &&
+                                    property_size > 0 &&
+                                    property_size <= 8
+                                )
+                                {
+                                    ++candidate_readable[
+                                        candidate_index
+                                    ];
+
+                                    ++fields_read;
+                                    ++numeric_fields;
+
+                                    slot_hash_u64(
+                                        content_fingerprint,
+                                        candidate_index
+                                    );
+
+                                    slot_hash_bytes(
+                                        content_fingerprint,
+                                        value_address,
+                                        static_cast<
+                                            std::size_t
+                                        >(property_size)
+                                    );
+                                }
+                                else if (
+                                    bool_property !=
+                                        nullptr &&
+                                    value_address !=
+                                        nullptr
+                                )
+                                {
+                                    ++candidate_readable[
+                                        candidate_index
+                                    ];
+
+                                    ++fields_read;
+
+                                    const bool value =
+                                        bool_property->
+                                            GetPropertyValue(
+                                                value_address
+                                            );
+
+                                    slot_hash_u64(
+                                        content_fingerprint,
+                                        candidate_index
+                                    );
+
+                                    slot_hash_byte(
+                                        content_fingerprint,
+                                        value ? 1 : 0
+                                    );
+                                }
+                                else if (
+                                    (
+                                        name_property !=
+                                            nullptr ||
+                                        struct_property !=
+                                            nullptr
+                                    ) &&
+                                    value_address !=
+                                        nullptr &&
+                                    property_size > 0 &&
+                                    property_size <= 32
+                                )
+                                {
+                                    ++candidate_readable[
+                                        candidate_index
+                                    ];
+
+                                    ++fields_read;
+                                    ++fixed_fields;
+
+                                    slot_hash_u64(
+                                        content_fingerprint,
+                                        candidate_index
+                                    );
+
+                                    slot_hash_bytes(
+                                        content_fingerprint,
+                                        value_address,
+                                        static_cast<
+                                            std::size_t
+                                        >(property_size)
+                                    );
+                                }
+                                else if (
+                                    object_property !=
+                                        nullptr &&
+                                    value_address !=
+                                        nullptr
+                                )
+                                {
+                                    ++candidate_readable[
+                                        candidate_index
+                                    ];
+
+                                    ++fields_read;
+
+                                    auto* nested_object =
+                                        object_property->
+                                            GetObjectPropertyValue(
+                                                value_address
+                                            );
+
+                                    const bool
+                                        nested_nonnull =
+                                            nested_object !=
+                                            nullptr;
+
+                                    nonnull_object_fields +=
+                                        nested_nonnull
+                                            ? 1U
+                                            : 0U;
+
+                                    slot_hash_u64(
+                                        content_fingerprint,
+                                        candidate_index
+                                    );
+
+                                    slot_hash_byte(
+                                        content_fingerprint,
+                                        nested_nonnull
+                                            ? 1
+                                            : 0
+                                    );
+                                }
+                            }
+                        }
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "SLOT_OBJECT index=%d "
+                            "nonnull=%d accepted_class=%d "
+                            "pal_item_slot=%d "
+                            "fields_read=%llu "
+                            "numeric_fields=%llu "
+                            "fixed_fields=%llu "
+                            "nonnull_object_fields=%llu",
+                            slot_index,
+                            nonnull ? 1 : 0,
+                            accepted_match ? 1 : 0,
+                            pal_slot_match ? 1 : 0,
+                            static_cast<
+                                unsigned long long
+                            >(fields_read),
+                            static_cast<
+                                unsigned long long
+                            >(numeric_fields),
+                            static_cast<
+                                unsigned long long
+                            >(fixed_fields),
+                            static_cast<
+                                unsigned long long
+                            >(nonnull_object_fields)
+                        );
+                    }
+                    catch (...)
+                    {
+                        ++slot_exceptions;
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "SLOT_OBJECT index=%d "
+                            "reason=exception",
+                            slot_index
+                        );
+                    }
+                }
+            }
+
+            if (first_valid_slot != nullptr)
+            {
+                for (
+                    std::size_t candidate_index{};
+                    candidate_index <
+                        candidate_count;
+                    ++candidate_index
+                )
+                {
+                    try
+                    {
+                        auto* property =
+                            first_valid_slot->
+                                GetPropertyByNameInChain(
+                                    candidate_names[
+                                        candidate_index
+                                    ]
+                                );
+
+                        if (property == nullptr)
+                        {
+                            emit_format(
+                                "[ModIntegratedStorageCpp] "
+                                "SLOT_PROPERTY candidate=%s "
+                                "exists=0",
+                                candidate_labels[
+                                    candidate_index
+                                ]
+                            );
+
+                            continue;
+                        }
+
+                        ++properties_found;
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "SLOT_PROPERTY candidate=%s "
+                            "exists=1 kind=%s offset=%d "
+                            "size=%d element_size=%d",
+                            candidate_labels[
+                                candidate_index
+                            ],
+                            slot_property_kind(
+                                property
+                            ),
+                            property->
+                                GetOffset_Internal(),
+                            property->GetSize(),
+                            property->GetElementSize()
+                        );
+                    }
+                    catch (...)
+                    {
+                        ++property_exceptions;
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "SLOT_PROPERTY candidate=%s "
+                            "exists=0 reason=exception",
+                            candidate_labels[
+                                candidate_index
+                            ]
+                        );
+                    }
+                }
+            }
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetSlotId"),
+                "GetSlotId",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetContainerId"),
+                "GetContainerId",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetItemId"),
+                "GetItemId",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetItemStackCount"),
+                "GetItemStackCount",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetStackCount"),
+                "GetStackCount",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            emit_detailed_function_parameters(
+                first_valid_slot,
+                STR("GetStaticItemData"),
+                "GetStaticItemData",
+                functions_found,
+                function_parameter_lines,
+                function_exceptions
+            );
+
+            for (
+                std::size_t candidate_index{};
+                candidate_index < candidate_count;
+                ++candidate_index
+            )
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "SLOT_CANDIDATE candidate=%s "
+                    "exists=%llu readable=%llu",
+                    candidate_labels[
+                        candidate_index
+                    ],
+                    static_cast<
+                        unsigned long long
+                    >(
+                        candidate_exists[
+                            candidate_index
+                        ]
+                    ),
+                    static_cast<
+                        unsigned long long
+                    >(
+                        candidate_readable[
+                            candidate_index
+                        ]
+                    )
+                );
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "SLOT_FINGERPRINT "
+                "guild_storage_objects=%zu "
+                "valid_storages=%llu "
+                "selected_storage_matches=%llu "
+                "selected_item_container=%d "
+                "slot_array=%d slot_inner_object=%d "
+                "accepted_slot_class=%d "
+                "pal_item_slot_class=%d "
+                "slot_count=%d nonnull_slots=%llu "
+                "accepted_class_matches=%llu "
+                "pal_slot_class_matches=%llu "
+                "properties_found=%llu "
+                "property_exceptions=%llu "
+                "functions_found=%llu "
+                "function_parameter_lines=%llu "
+                "function_exceptions=%llu "
+                "selection_exceptions=%llu "
+                "slot_exceptions=%llu "
+                "structural=%016llx "
+                "content=%016llx "
+                "content_restart_stable=0",
+                guild_storages->size(),
+                static_cast<unsigned long long>(
+                    valid_storages
+                ),
+                static_cast<unsigned long long>(
+                    selected_storage_matches
+                ),
+                selected_item_container != nullptr
+                    ? 1
+                    : 0,
+                slot_array_property != nullptr ? 1 : 0,
+                slot_object_property != nullptr ? 1 : 0,
+                accepted_slot_class != nullptr ? 1 : 0,
+                pal_item_slot_class != nullptr ? 1 : 0,
+                slot_count,
+                static_cast<unsigned long long>(
+                    nonnull_slots
+                ),
+                static_cast<unsigned long long>(
+                    accepted_class_matches
+                ),
+                static_cast<unsigned long long>(
+                    pal_slot_class_matches
+                ),
+                static_cast<unsigned long long>(
+                    properties_found
+                ),
+                static_cast<unsigned long long>(
+                    property_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    functions_found
+                ),
+                static_cast<unsigned long long>(
+                    function_parameter_lines
+                ),
+                static_cast<unsigned long long>(
+                    function_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    selection_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    slot_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    structural_fingerprint
+                ),
+                static_cast<unsigned long long>(
+                    content_fingerprint
+                )
+            );
+
+            if (
+                selected_storage_matches == 1 &&
+                selected_item_container != nullptr &&
+                slot_array_property != nullptr &&
+                slot_object_property != nullptr &&
+                accepted_slot_class != nullptr &&
+                pal_item_slot_class != nullptr &&
+                slot_count > 0 &&
+                nonnull_slots ==
+                    static_cast<std::uint64_t>(
+                        slot_count
+                    ) &&
+                accepted_class_matches ==
+                    nonnull_slots &&
+                pal_slot_class_matches ==
+                    nonnull_slots &&
+                properties_found > 0 &&
+                property_exceptions == 0 &&
+                function_exceptions == 0 &&
+                selection_exceptions == 0 &&
+                slot_exceptions == 0
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SLOT_FINGERPRINT RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SLOT_FINGERPRINT RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "SLOT_FINGERPRINT RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* chest_camp,
@@ -5067,6 +6108,11 @@ namespace
             plan_complete
         );
 
+        run_read_only_slot_fingerprint_probe(
+            registration_probe_guild,
+            plan_complete
+        );
+
         run_controlled_single_registration(
             registration_probe_chest,
             registration_probe_chest_camp,
@@ -5279,12 +6325,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4e-belong-query-layout");
+                STR("0.1.0-linux-stage4c.4f-slot-fingerprint");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only BelongInfo and "
-                    "query parameter layout probe."
+                    "Linux dedicated-server read-only UPalItemSlot "
+                    "metadata and aggregate fingerprint probe."
                 );
 
             ModAuthors =

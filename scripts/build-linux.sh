@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4e adds a read-only BelongInfo, ItemSlotArray and query-parameter layout survey.
-The normal staged package remains unarmed. The survey adds no ProcessEvent call and does not perform registration, removal, reconciliation, routing or item transfer.
+Stage 4c.4f adds a read-only UPalItemSlot metadata and aggregate fingerprint probe.
+The normal staged package remains unarmed. The probe adds no ProcessEvent call, invokes no reflected query, and does not perform registration, removal, reconciliation, routing or item transfer.
 EOF
 
 echo
