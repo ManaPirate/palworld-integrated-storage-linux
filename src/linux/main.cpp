@@ -616,6 +616,7 @@ namespace
     std::atomic_bool g_slot_fingerprint_reported{false};
     std::atomic_bool g_slot_identity_layout_reported{false};
     std::atomic_bool g_ordinal_identity_layout_reported{false};
+    std::atomic_bool g_semantic_repeatability_complete{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -6987,6 +6988,525 @@ namespace
         }
     }
 
+
+    constexpr std::uint64_t k_semantic_offset{
+        1469598103934665603ULL
+    };
+
+    constexpr std::uint64_t k_semantic_prime{
+        1099511628211ULL
+    };
+
+    auto semantic_mix_bytes(
+        std::uint64_t& state,
+        const void* data,
+        std::size_t size
+    ) noexcept -> void
+    {
+        if (data == nullptr)
+        {
+            state ^= 0xff;
+            state *= k_semantic_prime;
+            return;
+        }
+
+        const auto* bytes =
+            static_cast<const std::uint8_t*>(data);
+
+        for (std::size_t index{}; index < size; ++index)
+        {
+            state ^= bytes[index];
+            state *= k_semantic_prime;
+        }
+    }
+
+    auto semantic_mix_u64(
+        std::uint64_t& state,
+        std::uint64_t value
+    ) noexcept -> void
+    {
+        semantic_mix_bytes(
+            state,
+            &value,
+            sizeof(value)
+        );
+    }
+
+    struct SemanticSnapshot
+    {
+        bool valid{};
+        std::uint64_t fingerprint{k_semantic_offset};
+        std::int32_t slot_count{-1};
+        std::uint64_t nonnull_slots{};
+        std::uint64_t fully_read_slots{};
+        std::uint64_t container_bytes{};
+        std::uint64_t item_bytes{};
+        std::uint64_t stack_bytes{};
+        std::uint64_t exceptions{};
+    };
+
+    auto build_semantic_snapshot(
+        const GuildKey& selected_guild
+    ) noexcept -> SemanticSnapshot
+    {
+        SemanticSnapshot snapshot{};
+
+        try
+        {
+            static auto* guild_storages =
+                new std::vector<RC::Unreal::UObject*>();
+
+            guild_storages->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            auto* known_container =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UScriptStruct*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR("/Script/Pal.PalContainerId")
+                    );
+
+            auto* known_item =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UScriptStruct*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR("/Script/Pal.PalItemId")
+                    );
+
+            RC::Unreal::UObject* selected_container{};
+            std::uint64_t selected_matches{};
+
+            for (auto* storage : *guild_storages)
+            {
+                if (storage == nullptr)
+                {
+                    continue;
+                }
+
+                const auto item_container =
+                    read_object_property_candidate(
+                        storage,
+                        STR("ItemContainer")
+                    );
+
+                auto* container = item_container.value;
+                if (container == nullptr)
+                {
+                    continue;
+                }
+
+                auto* belong_property =
+                    container->GetPropertyByNameInChain(
+                        STR("BelongInfo")
+                    );
+
+                auto* belong_struct =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FStructProperty
+                    >(belong_property);
+
+                if (
+                    belong_property == nullptr ||
+                    belong_struct == nullptr
+                )
+                {
+                    continue;
+                }
+
+                const auto group_id =
+                    read_nested_struct_candidate(
+                        belong_struct->GetStruct().Get(),
+                        belong_property->
+                            ContainerPtrToValuePtr<void>(
+                                container
+                            ),
+                        belong_property->GetSize(),
+                        STR("GroupId")
+                    );
+
+                if (
+                    group_id.size_is_16 &&
+                    group_id.value == selected_guild
+                )
+                {
+                    ++selected_matches;
+                    selected_container = container;
+                }
+            }
+
+            if (
+                selected_matches != 1 ||
+                selected_container == nullptr ||
+                known_container == nullptr ||
+                known_item == nullptr
+            )
+            {
+                return snapshot;
+            }
+
+            auto* array_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FArrayProperty
+                >(
+                    selected_container->
+                        GetPropertyByNameInChain(
+                            STR("ItemSlotArray")
+                        )
+                );
+
+            auto* object_property =
+                array_property != nullptr
+                    ? RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(array_property->GetInner())
+                    : nullptr;
+
+            if (
+                array_property == nullptr ||
+                object_property == nullptr
+            )
+            {
+                return snapshot;
+            }
+
+            RC::Unreal::FScriptArrayHelper_InContainer
+                helper(
+                    array_property,
+                    selected_container
+                );
+
+            snapshot.slot_count = helper.Num();
+
+            semantic_mix_bytes(
+                snapshot.fingerprint,
+                selected_guild.data(),
+                selected_guild.size()
+            );
+
+            semantic_mix_u64(
+                snapshot.fingerprint,
+                static_cast<std::uint64_t>(
+                    snapshot.slot_count
+                )
+            );
+
+            for (
+                std::int32_t slot_index{};
+                slot_index < snapshot.slot_count;
+                ++slot_index
+            )
+            {
+                try
+                {
+                    auto* slot =
+                        object_property->
+                            GetObjectPropertyValue(
+                                helper.GetRawPtr(slot_index)
+                            );
+
+                    if (slot == nullptr)
+                    {
+                        continue;
+                    }
+
+                    ++snapshot.nonnull_slots;
+
+                    auto* container_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FStructProperty
+                        >(
+                            slot->GetPropertyByNameInChain(
+                                STR("ContainerId")
+                            )
+                        );
+
+                    auto* item_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FStructProperty
+                        >(
+                            slot->GetPropertyByNameInChain(
+                                STR("ItemId")
+                            )
+                        );
+
+                    auto* stack_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FNumericProperty
+                        >(
+                            slot->GetPropertyByNameInChain(
+                                STR("StackCount")
+                            )
+                        );
+
+                    if (
+                        container_property == nullptr ||
+                        item_property == nullptr ||
+                        stack_property == nullptr ||
+                        container_property->GetSize() != 16 ||
+                        item_property->GetSize() != 40 ||
+                        stack_property->GetSize() != 4 ||
+                        container_property->GetStruct().Get() !=
+                            known_container ||
+                        item_property->GetStruct().Get() !=
+                            known_item
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* container_data =
+                        container_property->
+                            ContainerPtrToValuePtr<void>(
+                                slot
+                            );
+
+                    auto* item_data =
+                        item_property->
+                            ContainerPtrToValuePtr<void>(
+                                slot
+                            );
+
+                    auto* stack_data =
+                        stack_property->
+                            ContainerPtrToValuePtr<void>(
+                                slot
+                            );
+
+                    if (
+                        container_data == nullptr ||
+                        item_data == nullptr ||
+                        stack_data == nullptr
+                    )
+                    {
+                        continue;
+                    }
+
+                    semantic_mix_u64(
+                        snapshot.fingerprint,
+                        static_cast<std::uint64_t>(
+                            slot_index
+                        )
+                    );
+
+                    semantic_mix_bytes(
+                        snapshot.fingerprint,
+                        container_data,
+                        16
+                    );
+
+                    semantic_mix_bytes(
+                        snapshot.fingerprint,
+                        item_data,
+                        40
+                    );
+
+                    semantic_mix_bytes(
+                        snapshot.fingerprint,
+                        stack_data,
+                        4
+                    );
+
+                    snapshot.container_bytes += 16;
+                    snapshot.item_bytes += 40;
+                    snapshot.stack_bytes += 4;
+                    ++snapshot.fully_read_slots;
+                }
+                catch (...)
+                {
+                    ++snapshot.exceptions;
+                }
+            }
+
+            snapshot.valid =
+                snapshot.slot_count > 0 &&
+                snapshot.nonnull_slots ==
+                    static_cast<std::uint64_t>(
+                        snapshot.slot_count
+                    ) &&
+                snapshot.fully_read_slots ==
+                    snapshot.nonnull_slots &&
+                snapshot.container_bytes ==
+                    snapshot.fully_read_slots * 16 &&
+                snapshot.item_bytes ==
+                    snapshot.fully_read_slots * 40 &&
+                snapshot.stack_bytes ==
+                    snapshot.fully_read_slots * 4 &&
+                snapshot.exceptions == 0;
+
+            return snapshot;
+        }
+        catch (...)
+        {
+            ++snapshot.exceptions;
+            return snapshot;
+        }
+    }
+
+    auto run_read_only_semantic_repeatability_probe(
+        const GuildKey& selected_guild,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (
+            !plan_complete ||
+            g_semantic_repeatability_complete.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        using Clock = std::chrono::steady_clock;
+
+        static bool initialized{};
+        static Clock::time_point next_sample{};
+        static std::uint64_t sample_count{};
+        static std::uint64_t matching_samples{};
+        static std::uint64_t baseline_fingerprint{};
+        static std::int32_t baseline_slot_count{-1};
+
+        const auto now = Clock::now();
+
+        if (!initialized)
+        {
+            initialized = true;
+            next_sample = now;
+        }
+
+        if (now < next_sample)
+        {
+            return;
+        }
+
+        const auto snapshot =
+            build_semantic_snapshot(selected_guild);
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "SEMANTIC_SAMPLE sample=%llu valid=%d "
+            "slot_count=%d nonnull_slots=%llu "
+            "fully_read_slots=%llu "
+            "container_bytes=%llu item_bytes=%llu "
+            "stack_bytes=%llu exceptions=%llu "
+            "fingerprint=%016llx "
+            "cross_restart_stable=0",
+            static_cast<unsigned long long>(
+                sample_count
+            ),
+            snapshot.valid ? 1 : 0,
+            snapshot.slot_count,
+            static_cast<unsigned long long>(
+                snapshot.nonnull_slots
+            ),
+            static_cast<unsigned long long>(
+                snapshot.fully_read_slots
+            ),
+            static_cast<unsigned long long>(
+                snapshot.container_bytes
+            ),
+            static_cast<unsigned long long>(
+                snapshot.item_bytes
+            ),
+            static_cast<unsigned long long>(
+                snapshot.stack_bytes
+            ),
+            static_cast<unsigned long long>(
+                snapshot.exceptions
+            ),
+            static_cast<unsigned long long>(
+                snapshot.fingerprint
+            )
+        );
+
+        if (!snapshot.valid)
+        {
+            g_semantic_repeatability_complete.store(
+                true,
+                std::memory_order_release
+            );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "SEMANTIC_REPEATABILITY RESULT=INCOMPLETE"
+            );
+            return;
+        }
+
+        if (sample_count == 0)
+        {
+            baseline_fingerprint = snapshot.fingerprint;
+            baseline_slot_count = snapshot.slot_count;
+            matching_samples = 1;
+        }
+        else if (
+            snapshot.fingerprint ==
+                baseline_fingerprint &&
+            snapshot.slot_count ==
+                baseline_slot_count
+        )
+        {
+            ++matching_samples;
+        }
+
+        ++sample_count;
+
+        if (sample_count >= 3)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "SEMANTIC_REPEATABILITY "
+                "samples=%llu matching_samples=%llu "
+                "slot_count=%d fingerprint=%016llx "
+                "cross_restart_stable=0",
+                static_cast<unsigned long long>(
+                    sample_count
+                ),
+                static_cast<unsigned long long>(
+                    matching_samples
+                ),
+                baseline_slot_count,
+                static_cast<unsigned long long>(
+                    baseline_fingerprint
+                )
+            );
+
+            g_semantic_repeatability_complete.store(
+                true,
+                std::memory_order_release
+            );
+
+            if (matching_samples == sample_count)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_REPEATABILITY RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_REPEATABILITY RESULT=INCOMPLETE"
+                );
+            }
+            return;
+        }
+
+        next_sample =
+            now + std::chrono::seconds(5);
+    }
+
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* chest_camp,
@@ -7883,6 +8403,11 @@ namespace
             plan_complete
         );
 
+        run_read_only_semantic_repeatability_probe(
+            registration_probe_guild,
+            plan_complete
+        );
+
         run_controlled_single_registration(
             registration_probe_chest,
             registration_probe_chest_camp,
@@ -8095,12 +8620,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4h-ordinal-identity-layout");
+                STR("0.1.0-linux-stage4c.4i-semantic-repeatability");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only ordinal "
-                    "identity field-layout probe."
+                    "Linux dedicated-server complete semantic "
+                    "fingerprint repeatability probe."
                 );
 
             ModAuthors =

@@ -22,36 +22,50 @@ description.
 ---
 
 ## 1. Current position
-
 ### Current accepted stage
 
 ```text
-Stage 4c.4h — ordinal nested-field identity layout
+Stage 4c.4i — complete semantic fingerprint repeatability
 ```
 
 Accepted commit baseline:
 
 ```text
-ab94c5374ce9ecc04839b5b7ace45c052a8bfb9b
+f344f608ba91b7b6cd9f0b591b8cdb46ee7444c1
 ```
 
 Accepted candidate identity:
 
 ```text
 Source SHA256:
-2b7bf6862276d0d38e7f531f0dc92ac7cdd98a77716ee20160ade33f5f30fcaa
+dd643713610ee6df4cc2edc8885b39aea1dd669fd6ace15622e7d1c24e81bc09
 
 Artifact SHA256:
-4c7e4d233833e946b80f6084dee450666a5311c21347fd0607d99bd8f731b67c
+d1a813ae83faaf7b8d57d8ae7179e8c79f288f4c77b6cad9b74b02324fa66024
 
 Build ID:
-339ebbfd295f9be5db18bed9dbad739a759df755
+beb86f657164492a8b0fdd4b191261ad35620a3d
 ```
 
 Accepted runtime evidence:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4h-ordinal-layout-20260806-134213
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4i-semantic-repeatability-20260806-141404
+```
+
+Accepted same-process semantic baseline:
+
+```text
+Slots:                 54
+Non-null slots:        54
+Fully read slots:      54
+Container bytes:       864
+Item bytes:            2160
+Stack bytes:           216
+Exceptions:            0
+Fingerprint:           27db2634ac8df4c6
+Matching snapshots:    3 / 3
+Cross-restart stable:  not claimed
 ```
 
 ### What is currently proven
@@ -71,30 +85,35 @@ Accepted runtime evidence:
     `PalDynamicItemId`.
 11. `PalDynamicItemId` is exactly two consecutive 16-byte `FGuid`
     structures.
-12. The complete container and item identity representations can be
-    hashed without reading unknown padding.
+12. The complete container, item, slot-index, and stack-count
+    representations can be hashed without reading unknown padding.
+13. A complete identity-and-stack fingerprint is stable across three
+    snapshots taken five seconds apart in one idle server process.
+14. Every one of the 54 slots was non-null and fully readable during the
+    accepted repeatability run.
 
 ### What is not yet proven
 
-1. That a complete identity-and-stack fingerprint is stable across
-   repeated snapshots in one idle server process.
-2. That registration changes aggregate item identity, stack counts,
-   membership, or visibility.
-3. Registration idempotency.
-4. Removal behavior.
-5. Full-plan registration and reconciliation.
-6. Persistence across restart.
-7. Player-visible integrated storage behavior.
+1. That the controlled registration call changes aggregate item
+   identity, stack counts, membership, or visibility.
+2. Registration idempotency.
+3. Removal behavior.
+4. Full-plan registration and reconciliation.
+5. Persistence across restart.
+6. Player-visible integrated storage behavior.
 
 ### Next stage
 
 ```text
-Stage 4c.4i — complete semantic fingerprint repeatability
+Stage 4c.4j — controlled semantic before/after registration observation
 ```
 
-The next stage remains unarmed and read-only. It must take three
-same-process snapshots, add no `ProcessEvent` call, invoke no reflected
-function, and perform no registration.
+The next stage must remain isolated and arm-file gated. It may perform
+exactly one already-validated registration call, surrounded by semantic
+snapshots of the selected guild aggregate.
+
+It must not perform a second registration call, execute the full plan,
+reconcile, test item transfer, or touch production.
 
 ## 2. Repository and branch strategy
 
@@ -638,6 +657,10 @@ call.
 
 ## 8. Accepted commit history
 
+The following branch commits form the accepted engineering baseline
+through Stage 4c.4h. Stage 4c.4i was built and validated on the final
+commit listed here and is committed by the current documentation update.
+
 ```text
 4bd97c9
 docs: add NullPrism Linux port plan
@@ -648,26 +671,54 @@ docs: identify project as Linux NullPrism port
 1cc4482
 feat(linux): add NullPrism lifecycle scaffold
 
-82a65b28c1850532f758f42d0db3d40f86b6554d
+82a65b2
 feat(linux): validate populated storage discovery
 
-debf0e1f20dbdcc4bff8319a641845ae57761412
+0a66c8d
+docs: explain native Linux dedicated-server port
+
+debf0e1
 feat(linux): associate chests with camps and guilds
 
-b0017c8b48c2e84acdb1de74c5beff146df889fe
+b0017c8
 fix(linux): resolve dedicated role on game thread
 
-e53faa1adb639858f22220877d374b48b0cef706
+e53faa1
 feat(linux): validate registration metadata read-only
 
-153a3c35f0d14f4dbd679659daa6a246e18aa165
+153a3c3
 feat(linux): add deterministic registration planner
+
+6c8f0ff
+feat(linux): validate controlled single registration
+
+ea84ea6
+docs: align project overview and port runsheet
+
+7a76231
+feat(linux): map storage observability surfaces
+
+00ffb61
+feat(linux): map aggregate container queries
+
+03e3907
+feat(linux): map guild aggregate layout
+
+f5005b4
+docs: repair active Linux port status
+
+ea9fbca
+feat(linux): fingerprint aggregate item slots
+
+def2cf9
+feat(linux): map nested slot identity
+
+ab94c53
+docs: record ordinal identity survey
+
+f344f60
+feat(linux): map ordinal item identity
 ```
-
-Stage 4c.3 is pending commit at the time this runsheet version was
-prepared.
-
----
 
 ## 9. Stage-by-stage runsheet
 
@@ -1631,7 +1682,8 @@ to prevent recurrence.
 
 - Several patch scripts guessed source shape incorrectly
 - Stage 4c.1d had a duplicate anchor
-- A conditional marker helper caused literal decay problems
+- Conditional or ternary selection of marker literals decays them to
+  `const char*`; literal-only `emit_marker` calls must use explicit branches
 - A correct build was rolled back by an incorrect string-encoding audit
 - Stage 4c.2 initially called `.c_str()` on `std::array<char, 33>`
 - A survey searched for a contiguous registration string even though the
@@ -1860,9 +1912,31 @@ Stage 4c.3 unarmed:
 
 Stage 4c.3 armed:
 /mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-armed-20260806-100441
-```
 
----
+Stage 4c.4b:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4b-metadata-20260806-110734
+
+Stage 4c.4c:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4c-linkage-20260806-111750
+
+Stage 4c.4d:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4d-query-metadata-20260806-114102
+
+Stage 4c.4e:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4e-deep-layout-20260806-121059
+
+Stage 4c.4f:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4f-slot-fingerprint-20260806-125800
+
+Stage 4c.4g:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4g-slot-layout-20260806-131852
+
+Stage 4c.4h:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4h-ordinal-layout-20260806-134213
+
+Stage 4c.4i:
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4i-semantic-repeatability-20260806-141404
+```
 
 ## 15. Stage 4c.4a — class-specific observability survey
 
@@ -2956,22 +3030,177 @@ The isolated environment was restored exactly and production remained
 unchanged.
 
 ---
+## 25. Stage 4c.4i — complete semantic fingerprint repeatability
 
-## 25. Immediate next action
+### Goal
 
-Run Stage 4c.4i:
+Prove that the complete slot identity-and-stack fingerprint established
+by Stage 4c.4h is repeatable across multiple snapshots in one idle server
+process.
+
+The probe remained read-only and unarmed. It added no `ProcessEvent`
+call, invoked no reflected function, and performed no registration.
+
+### Candidate identity
 
 ```text
-complete semantic fingerprint repeatability
+Version:
+0.1.0-linux-stage4c.4i-semantic-repeatability
+
+Source SHA256:
+dd643713610ee6df4cc2edc8885b39aea1dd669fd6ace15622e7d1c24e81bc09
+
+Artifact SHA256:
+d1a813ae83faaf7b8d57d8ae7179e8c79f288f4c77b6cad9b74b02324fa66024
+
+Build ID:
+beb86f657164492a8b0fdd4b191261ad35620a3d
+```
+
+### Initial build failure and correction
+
+The first generated source attempted to pass a ternary-selected marker
+to:
+
+```cpp
+emit_marker(const char (&message)[Size])
+```
+
+The conditional expression decayed the two string literals to
+`const char*`, so Clang could not bind the result to the literal-only
+array-reference overload.
+
+The accepted correction kept `emit_marker` unchanged and replaced the
+ternary with explicit `if` and `else` branches, preserving compile-time
+character arrays at both call sites.
+
+The failed build automatically restored the committed Stage 4c.4h source
+and staged package. Because the Unraid host does not provide `python3`,
+the generator correction was applied through the development container.
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4i-semantic-repeatability-20260806-141404
+```
+
+All three snapshots were complete and identical:
+
+| Sample | Valid | Slots | Non-null | Fully read | Exceptions | Fingerprint |
+|---:|---:|---:|---:|---:|---:|---|
+| 0 | 1 | 54 | 54 | 54 | 0 | `27db2634ac8df4c6` |
+| 1 | 1 | 54 | 54 | 54 | 0 | `27db2634ac8df4c6` |
+| 2 | 1 | 54 | 54 | 54 | 0 | `27db2634ac8df4c6` |
+
+Exact hashed component coverage per snapshot:
+
+```text
+PalContainerId bytes:
+864
+
+PalItemId bytes:
+2160
+
+StackCount bytes:
+216
+```
+
+These totals correspond exactly to:
+
+```text
+54 × 16-byte PalContainerId
+54 × 40-byte PalItemId
+54 × 4-byte StackCount
+```
+
+Repeatability result:
+
+```text
+SEMANTIC_REPEATABILITY PASS:       1
+SEMANTIC_REPEATABILITY INCOMPLETE: 0
+SEMANTIC_REPEATABILITY EXCEPTION:  0
+Semantic samples:                  3
+Matching samples:                  3
+Registration called:               0
+Gate disabled:                     1
+Invalid thread:                    0
+Crash markers:                     0
+Intentional stop exit code:        143
+```
+
+### Restoration and production isolation
+
+The isolated environment was restored exactly:
+
+```text
+Restored isolated mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Restored Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Restored player saves:
+19
+```
+
+Production remained unchanged:
+
+```text
+PalServer PID:
+171
+
+Container StartedAt:
+2026-08-06T08:33:34.425634823Z
+```
+
+### Accepted interpretation
+
+The selected guild aggregate has a stable complete semantic baseline
+within one idle server process:
+
+```text
+slot_count=54
+nonnull_slots=54
+fully_read_slots=54
+fingerprint=27db2634ac8df4c6
+```
+
+The baseline is suitable for controlled before/after comparison around
+one registration call.
+
+The embedded `FName` remains process-local. Stage 4c.4i therefore makes
+no cross-restart stability or persistence claim.
+
+---
+## 26. Immediate next action
+
+Run Stage 4c.4j:
+
+```text
+controlled semantic before/after registration observation
 ```
 
 Required work:
 
-1. Traverse all 54 validated aggregate slots.
-2. Hash slot index, `PalContainerId`, `PalItemId`, and `StackCount`.
-3. Take three snapshots five seconds apart in one server process.
-4. Require identical slot counts, component counts, and fingerprints.
-5. Mark the fingerprint as not cross-restart stable.
-6. Keep the package unarmed.
-7. Add no `ProcessEvent` call.
-8. Invoke no reflected function and perform no registration.
+1. Start from the accepted populated-world save and unarmed package.
+2. Capture a complete semantic baseline for the selected guild aggregate.
+3. Arm only the existing adjacent Stage 4c.3 one-shot gate in the
+   isolated environment.
+4. Execute exactly one already-validated foreign-chest registration pair.
+5. Capture an immediate semantic snapshot and repeated delayed snapshots
+   during the stability window.
+6. Compare slot count, non-null count, fully-read count, component-byte
+   totals, and complete fingerprint against the baseline.
+7. Report whether the call produced a deterministic and retained semantic
+   change.
+8. Do not perform a second registration call.
+9. Do not execute the 285-pair plan, reconcile, test item transfer, or
+   touch production.
+10. Restore the isolated mod and save, then verify production PID and
+    container start time are unchanged.
+
+An unchanged fingerprint is still a valid observational result, but it
+does not satisfy effect observability. Exact-pair idempotency must remain
+blocked until a specific retained registration effect is demonstrated.

@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4h adds a read-only ordinal identity field-layout probe.
-The normal staged package remains unarmed. The probe converts no field names, reads no field values, adds no ProcessEvent call, invokes no reflected function, and does not perform registration, removal, reconciliation, routing or item transfer.
+Stage 4c.4i adds a complete read-only semantic fingerprint repeatability probe.
+The normal staged package remains unarmed. Three same-process snapshots hash only the proven PalContainerId, PalItemId and StackCount layouts. The probe adds no ProcessEvent call, invokes no reflected function, and performs no registration or reconciliation.
 EOF
 
 echo
