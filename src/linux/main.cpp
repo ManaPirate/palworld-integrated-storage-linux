@@ -611,6 +611,7 @@ namespace
 
     std::atomic_bool g_observability_metadata_reported{false};
     std::atomic_bool g_item_storage_linkage_reported{false};
+    std::atomic_bool g_container_query_metadata_reported{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -2678,6 +2679,557 @@ namespace
         }
     }
 
+
+    auto emit_observability_function_layout(
+        RC::Unreal::UObject* object,
+        const char* object_label,
+        const RC::Unreal::TCHAR* candidate_name,
+        const char* candidate_label,
+        ObservabilityMetadataCounters& counters
+    ) noexcept -> void
+    {
+        if (object == nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "QUERY_FUNCTION object=%s candidate=%s "
+                "exists=0 reason=null_object",
+                object_label,
+                candidate_label
+            );
+
+            return;
+        }
+
+        try
+        {
+            auto* function =
+                object->GetFunctionByNameInChain(
+                    candidate_name
+                );
+
+            if (function == nullptr)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "QUERY_FUNCTION object=%s candidate=%s "
+                    "exists=0",
+                    object_label,
+                    candidate_label
+                );
+
+                return;
+            }
+
+            ++counters.functions_found;
+
+            std::uint64_t inputs{};
+            std::uint64_t returns{};
+            std::uint64_t object_inputs{};
+            std::uint64_t object_returns{};
+            std::uint64_t struct_inputs{};
+            std::uint64_t struct_returns{};
+            std::uint64_t array_inputs{};
+            std::uint64_t array_returns{};
+            std::uint64_t set_inputs{};
+            std::uint64_t set_returns{};
+            std::uint64_t map_inputs{};
+            std::uint64_t map_returns{};
+
+            std::int32_t first_input_offset{-1};
+            std::int32_t first_input_size{-1};
+            std::int32_t first_return_offset{-1};
+            std::int32_t first_return_size{-1};
+
+            for (
+                auto* property :
+                function->ForEachProperty()
+            )
+            {
+                if (
+                    property == nullptr ||
+                    !property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_Parm
+                    )
+                )
+                {
+                    continue;
+                }
+
+                const bool is_return =
+                    property->HasAnyPropertyFlags(
+                        RC::Unreal::EPropertyFlags::
+                            CPF_ReturnParm
+                    );
+
+                const bool is_object =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectPropertyBase
+                    >(property) != nullptr ||
+                    RC::Unreal::CastField<
+                        RC::Unreal::FWeakObjectProperty
+                    >(property) != nullptr;
+
+                const bool is_struct =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FStructProperty
+                    >(property) != nullptr;
+
+                const bool is_array =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(property) != nullptr;
+
+                const bool is_set =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FSetProperty
+                    >(property) != nullptr;
+
+                const bool is_map =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FMapProperty
+                    >(property) != nullptr;
+
+                if (is_return)
+                {
+                    ++returns;
+
+                    if (first_return_offset < 0)
+                    {
+                        first_return_offset =
+                            property->
+                                GetOffset_Internal();
+
+                        first_return_size =
+                            property->GetSize();
+                    }
+
+                    object_returns +=
+                        is_object ? 1U : 0U;
+
+                    struct_returns +=
+                        is_struct ? 1U : 0U;
+
+                    array_returns +=
+                        is_array ? 1U : 0U;
+
+                    set_returns +=
+                        is_set ? 1U : 0U;
+
+                    map_returns +=
+                        is_map ? 1U : 0U;
+                }
+                else
+                {
+                    ++inputs;
+
+                    if (first_input_offset < 0)
+                    {
+                        first_input_offset =
+                            property->
+                                GetOffset_Internal();
+
+                        first_input_size =
+                            property->GetSize();
+                    }
+
+                    object_inputs +=
+                        is_object ? 1U : 0U;
+
+                    struct_inputs +=
+                        is_struct ? 1U : 0U;
+
+                    array_inputs +=
+                        is_array ? 1U : 0U;
+
+                    set_inputs +=
+                        is_set ? 1U : 0U;
+
+                    map_inputs +=
+                        is_map ? 1U : 0U;
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "QUERY_FUNCTION object=%s candidate=%s "
+                "exists=1 parms=%zu inputs=%llu "
+                "returns=%llu object_inputs=%llu "
+                "object_returns=%llu struct_inputs=%llu "
+                "struct_returns=%llu array_inputs=%llu "
+                "array_returns=%llu set_inputs=%llu "
+                "set_returns=%llu map_inputs=%llu "
+                "map_returns=%llu first_input_offset=%d "
+                "first_input_size=%d first_return_offset=%d "
+                "first_return_size=%d",
+                object_label,
+                candidate_label,
+                function->GetParmsSize(),
+                static_cast<unsigned long long>(
+                    inputs
+                ),
+                static_cast<unsigned long long>(
+                    returns
+                ),
+                static_cast<unsigned long long>(
+                    object_inputs
+                ),
+                static_cast<unsigned long long>(
+                    object_returns
+                ),
+                static_cast<unsigned long long>(
+                    struct_inputs
+                ),
+                static_cast<unsigned long long>(
+                    struct_returns
+                ),
+                static_cast<unsigned long long>(
+                    array_inputs
+                ),
+                static_cast<unsigned long long>(
+                    array_returns
+                ),
+                static_cast<unsigned long long>(
+                    set_inputs
+                ),
+                static_cast<unsigned long long>(
+                    set_returns
+                ),
+                static_cast<unsigned long long>(
+                    map_inputs
+                ),
+                static_cast<unsigned long long>(
+                    map_returns
+                ),
+                first_input_offset,
+                first_input_size,
+                first_return_offset,
+                first_return_size
+            );
+        }
+        catch (...)
+        {
+            ++counters.function_exceptions;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "QUERY_FUNCTION object=%s candidate=%s "
+                "exists=0 reason=exception",
+                object_label,
+                candidate_label
+            );
+        }
+    }
+
+    auto run_read_only_container_query_metadata_probe(
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_container_query_metadata_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            static auto* guild_storages =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            static auto* item_container_managers =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            guild_storages->clear();
+            item_container_managers->clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalGuildItemStorage"),
+                *guild_storages
+            );
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalItemContainerManager"),
+                *item_container_managers
+            );
+
+            RC::Unreal::UObject* guild_storage{};
+            RC::Unreal::UObject* guild_item_container{};
+            RC::Unreal::UObject* item_container_manager{};
+
+            for (auto* candidate : *guild_storages)
+            {
+                if (candidate == nullptr)
+                {
+                    continue;
+                }
+
+                const auto item_container =
+                    read_object_property_candidate(
+                        candidate,
+                        STR("ItemContainer")
+                    );
+
+                if (
+                    item_container.exists &&
+                    item_container.object_property &&
+                    item_container.value != nullptr
+                )
+                {
+                    guild_storage = candidate;
+                    guild_item_container =
+                        item_container.value;
+                    break;
+                }
+            }
+
+            for (
+                auto* candidate :
+                *item_container_managers
+            )
+            {
+                if (candidate != nullptr)
+                {
+                    item_container_manager =
+                        candidate;
+                    break;
+                }
+            }
+
+            ObservabilityMetadataCounters counters{};
+
+            const RC::Unreal::TCHAR*
+                container_property_names[] = {
+                    STR("ItemContainerId"),
+                    STR("ItemContainerID"),
+                    STR("ContainerId"),
+                    STR("ContainerID"),
+                    STR("ItemContainerBelongInfo"),
+                    STR("BelongInfo"),
+                    STR("ContainerList"),
+                    STR("ItemSlotArray"),
+                    STR("SlotArray"),
+                    STR("Slots"),
+                    STR("ItemSlots"),
+                    STR("ItemArray"),
+                    STR("Items")
+                };
+
+            const char* container_property_labels[] = {
+                    "ItemContainerId",
+                    "ItemContainerID",
+                    "ContainerId",
+                    "ContainerID",
+                    "ItemContainerBelongInfo",
+                    "BelongInfo",
+                    "ContainerList",
+                    "ItemSlotArray",
+                    "SlotArray",
+                    "Slots",
+                    "ItemSlots",
+                    "ItemArray",
+                    "Items"
+                };
+
+            for (
+                std::size_t index{};
+                index <
+                    sizeof(container_property_names) /
+                    sizeof(container_property_names[0]);
+                ++index
+            )
+            {
+                emit_observability_property_metadata(
+                    guild_item_container,
+                    "guild_item_container",
+                    container_property_names[index],
+                    container_property_labels[index],
+                    counters
+                );
+            }
+
+            const RC::Unreal::TCHAR*
+                container_function_names[] = {
+                    STR("GetContainerId"),
+                    STR("GetItemContainerId"),
+                    STR("GetSlotCount"),
+                    STR("GetItemSlotNum"),
+                    STR("GetSlots"),
+                    STR("GetSlot"),
+                    STR("GetSlotBySlotIndex"),
+                    STR("GetItemSlot")
+                };
+
+            const char* container_function_labels[] = {
+                    "GetContainerId",
+                    "GetItemContainerId",
+                    "GetSlotCount",
+                    "GetItemSlotNum",
+                    "GetSlots",
+                    "GetSlot",
+                    "GetSlotBySlotIndex",
+                    "GetItemSlot"
+                };
+
+            for (
+                std::size_t index{};
+                index <
+                    sizeof(container_function_names) /
+                    sizeof(container_function_names[0]);
+                ++index
+            )
+            {
+                emit_observability_function_layout(
+                    guild_item_container,
+                    "guild_item_container",
+                    container_function_names[index],
+                    container_function_labels[index],
+                    counters
+                );
+            }
+
+            const RC::Unreal::TCHAR*
+                manager_property_names[] = {
+                    STR("ItemContainerMap_InServer"),
+                    STR("ContainerMap_InServer"),
+                    STR("ItemContainerMap"),
+                    STR("ContainerMap")
+                };
+
+            const char* manager_property_labels[] = {
+                    "ItemContainerMap_InServer",
+                    "ContainerMap_InServer",
+                    "ItemContainerMap",
+                    "ContainerMap"
+                };
+
+            for (
+                std::size_t index{};
+                index <
+                    sizeof(manager_property_names) /
+                    sizeof(manager_property_names[0]);
+                ++index
+            )
+            {
+                emit_observability_property_metadata(
+                    item_container_manager,
+                    "item_container_manager",
+                    manager_property_names[index],
+                    manager_property_labels[index],
+                    counters
+                );
+            }
+
+            const RC::Unreal::TCHAR*
+                manager_function_names[] = {
+                    STR("GetGroupIdByItemContainerId"),
+                    STR("GetGroupIdByItemSlotId"),
+                    STR("GetContainer"),
+                    STR("TryGetContainer"),
+                    STR("GetItemContainer")
+                };
+
+            const char* manager_function_labels[] = {
+                    "GetGroupIdByItemContainerId",
+                    "GetGroupIdByItemSlotId",
+                    "GetContainer",
+                    "TryGetContainer",
+                    "GetItemContainer"
+                };
+
+            for (
+                std::size_t index{};
+                index <
+                    sizeof(manager_function_names) /
+                    sizeof(manager_function_names[0]);
+                ++index
+            )
+            {
+                emit_observability_function_layout(
+                    item_container_manager,
+                    "item_container_manager",
+                    manager_function_names[index],
+                    manager_function_labels[index],
+                    counters
+                );
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "QUERY_META guild_storage_objects=%zu "
+                "guild_storage=%d guild_item_container=%d "
+                "item_container_manager_objects=%zu "
+                "item_container_manager=%d "
+                "properties_found=%llu "
+                "functions_found=%llu "
+                "property_exceptions=%llu "
+                "function_exceptions=%llu",
+                guild_storages->size(),
+                guild_storage != nullptr ? 1 : 0,
+                guild_item_container != nullptr ? 1 : 0,
+                item_container_managers->size(),
+                item_container_manager != nullptr ? 1 : 0,
+                static_cast<unsigned long long>(
+                    counters.properties_found
+                ),
+                static_cast<unsigned long long>(
+                    counters.functions_found
+                ),
+                static_cast<unsigned long long>(
+                    counters.property_exceptions
+                ),
+                static_cast<unsigned long long>(
+                    counters.function_exceptions
+                )
+            );
+
+            if (
+                guild_item_container != nullptr &&
+                item_container_manager != nullptr &&
+                counters.property_exceptions == 0 &&
+                counters.function_exceptions == 0
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "QUERY_META RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "QUERY_META RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "QUERY_META RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* chest_camp,
@@ -3550,6 +4102,10 @@ namespace
             plan_complete
         );
 
+        run_read_only_container_query_metadata_probe(
+            plan_complete
+        );
+
         run_controlled_single_registration(
             registration_probe_chest,
             registration_probe_chest_camp,
@@ -3762,12 +4318,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4c-item-storage-linkage");
+                STR("0.1.0-linux-stage4c.4d-container-query-metadata");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only item-storage "
-                    "linkage probe with guarded one-shot registration."
+                    "Linux dedicated-server read-only aggregate-container "
+                    "query metadata probe with guarded registration."
                 );
 
             ModAuthors =

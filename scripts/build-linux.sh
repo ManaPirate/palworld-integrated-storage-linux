@@ -245,7 +245,7 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4c adds a read-only item-storage-model linkage survey for the selected chest, item container and guild storage.
+Stage 4c.4d adds a read-only aggregate ItemContainer and manager query-metadata survey.
 The normal staged package remains unarmed. The survey adds no ProcessEvent call and does not perform registration, removal, reconciliation, routing or item transfer.
 EOF
 

@@ -2061,7 +2061,171 @@ unchanged.
 
 ---
 
-## 18. Immediate next action
+## 18. Stage 4c.4d — aggregate container query metadata
+
+### Goal
+
+Identify a readable aggregate guild-container surface and validate the
+metadata needed to map container objects back to guilds.
+
+No query function was invoked.
+
+### Candidate identity
+
+```text
+Version:
+0.1.0-linux-stage4c.4d-container-query-metadata
+
+Source SHA256:
+dfc02ebc8da9bf62d75dce749abf950b9e7973583cde02fecb6235a52b740faa
+
+Artifact SHA256:
+b71b262470613d6bc415f36faa3ab626753e9e1ba4cd59ecd8e056d399cc728b
+
+Build ID:
+b9ef931c62b0f218f0cae9a61e9158f01f502bf1
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4d-query-metadata-20260806-114102
+```
+
+Results:
+
+```text
+QUERY_META PASS:       1
+QUERY_META INCOMPLETE: 0
+QUERY_META EXCEPTION:  0
+Registration called:   0
+Gate disabled:         1
+Invalid thread:        0
+Crash markers:         0
+```
+
+The aggregate `UPalItemContainer` exposed:
+
+```text
+BelongInfo
+    kind:   struct
+    offset: 216
+    size:   32
+
+ItemSlotArray
+    kind:         array
+    offset:       112
+    size:         16
+    element size: 16
+    inner type:   object
+```
+
+The single discovered `UPalItemContainerManager` exposed:
+
+```text
+ItemContainerMap_InServer
+    kind:   map
+    offset: 152
+    size:   80
+```
+
+The following reflected query layouts were validated:
+
+```text
+GetGroupIdByItemContainerId
+    parameter bytes:      40
+    inputs:               2
+    object inputs:        1
+    struct inputs:        1
+    return values:        1
+    struct returns:       1
+    first input offset:   0
+    first input size:     8
+    return offset:        24
+    return size:          16
+
+GetGroupIdByItemSlotId
+    parameter bytes:      44
+    inputs:               2
+    object inputs:        1
+    struct inputs:        1
+    return values:        1
+    struct returns:       1
+    first input offset:   0
+    first input size:     8
+    return offset:        28
+    return size:          16
+
+GetContainer
+    parameter bytes:      24
+    inputs:               1
+    struct inputs:        1
+    object returns:       1
+    first input offset:   0
+    first input size:     16
+    return offset:        16
+    return size:          8
+
+TryGetContainer
+    parameter bytes:      25
+    inputs:               2
+    object inputs:        1
+    struct inputs:        1
+    return values:        1
+    first input offset:   0
+    first input size:     16
+    return offset:        24
+    return size:          1
+```
+
+### Accepted conclusion
+
+There are now three credible read-only observability surfaces:
+
+1. `UPalItemContainer.BelongInfo`
+2. `UPalItemContainer.ItemSlotArray`
+3. `UPalItemContainerManager.ItemContainerMap_InServer`
+
+The strongest mapping route is likely:
+
+```text
+guild ItemContainer
+    -> BelongInfo or container identifier
+    -> UPalItemContainerManager
+    -> GetGroupIdByItemContainerId
+    -> 16-byte guild identifier
+```
+
+Before any query invocation, the nested `BelongInfo` layout, map key/value
+types, array element type, and every parameter offset must be inspected
+explicitly.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 19. Immediate next action
+
+Run Stage 4c.4e:
+
+```text
+deep container-layout and parameter-layout survey
+```
+
+Required work:
+
+1. Inspect `FStructProperty` and nested-struct reflection APIs.
+2. Inspect `BelongInfo` candidate member names.
+3. Inspect `FMapProperty` key and value metadata APIs.
+4. Inspect `ItemContainerMap_InServer` key/value types.
+5. Inspect the exact offset, size, flags and property type of every
+   `GetGroupIdByItemContainerId` parameter.
+6. Inspect `ItemSlotArray` inner accepted class.
+7. Keep all query functions uncalled.
+8. Keep registration, removal and reconciliation disabled.
 
 Run Stage 4c.4d:
 
