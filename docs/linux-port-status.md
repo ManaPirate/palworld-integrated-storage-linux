@@ -1,298 +1,195 @@
-# Linux Dedicated-Server Port Status
+# Linux Dedicated-Server Port Overview
 
-Last updated: 6 August 2026
+## Purpose
 
-## Overview
+This repository ports Integrated Storage to a native Linux Palworld
+dedicated server.
 
-This repository is the native Linux dedicated-server port of [Sarfflow's Palworld Integrated Storage](https://github.com/Sarfflow/palworld-integrated-storage).
+The goal is to reproduce the server-side behaviour of the original
+Windows client/server mod without carrying across its Windows-only
+detours, client UI hooks, executable pattern scans, or RPC transport.
 
-The Linux implementation targets [NullPrism RE-UE4SS-Linux](https://github.com/NullPrism/RE-UE4SS-Linux) for a Palworld dedicated server running natively on Linux.
+The finished Linux port is intended to let storage owned by camps in the
+same guild participate in one server-authoritative shared storage system.
 
-Development remains on `linux/nullprism-dedicated-server`.
+## Target platform
 
-The port is not yet ready for production deployment. Current work has validated discovery, ownership association, dedicated-server role handling, registration metadata, and the complete registration plan without performing any storage registration or item mutation.
+The port currently targets:
 
-## Port scope
+- Palworld dedicated server running natively on Linux
+- x86-64
+- NullPrism RE-UE4SS-Linux
+- Native C++ user mods loaded as `main.so`
+- A dedicated-server-only execution model
 
-The dedicated-server port retains:
+Listen servers, single-player sessions, client UI modification, and
+Windows builds are outside the current Linux scope.
 
-- Dedicated-server and world validation
-- Camp and guild discovery
-- Camp storage-module discovery
-- Chest-model discovery
-- Chest-to-camp ownership association
-- Same-guild cross-camp registration planning
-- Registration-function metadata validation
-- Future server-authoritative registration and reconciliation
-- Configuration and diagnostic logging
+## Technology
 
-Currently excluded:
+### NullPrism RE-UE4SS-Linux
 
-- Windows API dependencies
-- PolyHook and executable AOB detours
-- Client inventory and crafting UI changes
-- Client-side display-slot injection
-- RPC transport from the combined Windows client/server mod
-- Listen-server and single-player support
-- HUD or widget modification
+NullPrism provides the native Linux UE4SS loader and the Unreal
+reflection surface used by this port.
 
-## Current safety boundary
-
-The Linux port currently performs read-only discovery and planning.
-
-It has not yet:
-
-- Invoked `OnAvailableConcreteModel_ServerInternal`
-- Registered a chest with a foreign storage module
-- Transferred or routed an item
-- Modified a storage container
-- Modified an item array
-- Intentionally changed a Palworld save
-- Been installed on the production server
-
-The native artifact contains two deliberate `ProcessEvent` call sites:
-
-1. PalUtility server and dedicated-server role queries
-2. `GetBaseCampModelBelongTo` chest ownership queries
-
-The registration function is resolved and inspected but never invoked.
-
-## Accepted stages
-
-### Stage 4a — camp, guild, and storage discovery
+The mod is installed in the standard native-mod layout:
 
 ```text
-Camps:    20
-Guilds:   8
-Storages: 20
+Mods/ModIntegratedStorageCpp/
+├── dlls/
+│   └── main.so
+└── enabled.txt
 ```
 
-### Stage 4b.1 — chest discovery
+The library exports the standard native lifecycle functions:
 
 ```text
-Chest objects: 157
-Valid:         157
-Null:          0
+start_mod
+uninstall_mod
 ```
 
-### Stage 4b.2 — chest ownership association
+### Unreal reflection
 
-Chest ownership is resolved on the Unreal game thread through `GetBaseCampModelBelongTo`.
+The implementation uses Unreal reflection rather than hard-coded Linux
+object layouts wherever a reflected alternative is available.
 
-```text
-Chest objects:       157
-Associated chests:   157
-Unassociated chests: 0
-Guilds:              8
-Chest-owning camps:  17
-```
+Current reflected operations include:
 
-Three valid camps contain no chest models.
+- Discovering camp, chest, and storage objects
+- Reading camp guild identifiers
+- Reading camp module arrays
+- Resolving chest ownership through
+  `GetBaseCampModelBelongTo`
+- Resolving registration through
+  `OnAvailableConcreteModel_ServerInternal`
+- Inspecting function parameter metadata
+- Validating object-property type, size, offset, and accepted class
+- Constructing zeroed parameter buffers from reflected metadata
 
-### Stage 4c.1e — game-thread role hardening
+The port does not assume that an input or return value is at byte offset
+zero. Offsets and bounds are validated before use.
 
-```text
-ROLE THREAD=GAME
-ROLE server=1 dedicated=1
-ROLE RESULT=PASS
-```
+### Threading model
 
-Accepted commit:
+NullPrism's normal mod update callback is not the Unreal game thread.
 
-```text
-b0017c8b48c2e84acdb1de74c5beff146df889fe
-fix(linux): resolve dedicated role on game thread
-```
+The port therefore separates work into two paths:
 
-### Stage 4c.1f — registration metadata validation
+- The worker-side update path observes world state and requests work.
+- The EngineTick callback performs Unreal `ProcessEvent` calls and other
+  game-thread-only operations.
 
-Resolved function:
+Dedicated-server role checks, chest ownership queries, registration
+metadata validation, and registration calls are executed on the Unreal
+game thread.
 
-```text
-OnAvailableConcreteModel_ServerInternal
-```
+Atomic state is used to coordinate requests and prevent overlapping
+association passes.
 
-Observed runtime layout:
+### Process-lifetime module pin
 
-```text
-Parameter bytes:   8
-Input parameters:  1
-Object inputs:     1
-Object offset:     0
-Object size:       8
-Property flags:    0x18001000000280
-Property class:    valid
-Chest compatible:  yes
-```
+The mod retains one additional `dlopen` reference to its own shared
+library for the lifetime of the PalServer process.
 
-The function was not invoked.
+This prevents NullPrism callback storage from referencing unmapped
+native code if the original mod handle is released before deferred
+callback cleanup completes.
 
-Accepted commit:
+Native hot reload is therefore intentionally unsupported.
 
-```text
-e53faa1adb639858f22220877d374b48b0cef706
-feat(linux): validate registration metadata read-only
-```
+## Server-side model
 
-## Stage 4c.2 — deterministic would-register plan
+The Linux port builds the storage relationship from reflected server
+objects.
 
-Stage 4c.2 constructs the complete same-guild, foreign-camp registration plan while remaining read-only.
+### Camps and guilds
 
-It:
+Each valid camp is associated with its 16-byte guild identifier.
 
-- Groups every associated chest by guild and owning camp
-- Groups every storage module by guild and owning camp
-- Includes valid storage camps containing no chest models
-- Creates pairs only within the same guild
-- Excludes each chest's own-camp storage
-- Deduplicates chest, storage, and exact pair pointers
-- Detects camp and guild ownership conflicts
-- Produces per-guild counts
-- Produces order-independent process-local fingerprints
-- Selects one planned pair for metadata validation
-- Never invokes the registration function
+Guild identifiers are handled as binary data rather than Linux
+`wchar_t`, avoiding the platform-width mismatch with Unreal's
+two-byte character representation.
 
-### Accepted candidate identity
+### Storage modules
 
-```text
-Version:
-0.1.0-linux-stage4c.2-would-register
+Every `PalBaseCampModuleItemStorage` module is collected from each valid
+camp.
 
-Linux source SHA256:
-12ee389499b6c5a5e944b7c4f34f70b378b775d7527df080ebc1e80cce5b8865
+Camps with a storage module remain valid registration targets even when
+they currently contain no chest models.
 
-Linux main.so SHA256:
-0d494b86751d317f102812622ecc5ff48b796d8f2f74cdeedaa2e22d41d2b1a3
+### Chests
 
-ELF Build ID:
-427acb4e36a79956ce3c96f97473b507f3a697e2
-```
+Every `PalMapObjectItemChestModel` is discovered and associated with its
+owning camp through the reflected
+`GetBaseCampModelBelongTo` function.
 
-### Populated-world acceptance
+### Registration plan
 
-The planner was validated across 25 repeated scans over a 180-second stability window.
+For each guild, the port creates every unique pair where:
 
-```text
-ROLE THREAD=GAME:       1
-ROLE RESULT=PASS:       1
-Planner passes:         25
-Planner incomplete:     0
-Metadata passes:        25
-Metadata incomplete:    0
-Chest passes:           25
-Chest incomplete:       0
-Invalid thread markers: 0
-Exception markers:      0
-Crash markers:          0
-```
+- The chest and storage belong to the same guild.
+- The storage belongs to a different camp from the chest.
+- The chest, storage, camp, and guild relationships are valid.
+- Duplicate pointers and duplicate exact pairs are rejected.
+- Conflicting camp or guild ownership aborts plan acceptance.
 
-Stable global plan:
+The current populated-world validation plan contains 157 chests,
+20 storage modules, and 285 same-guild foreign-camp registration pairs.
 
-```text
-Guilds:                 8
-Guilds with pairs:      7
-Associated chests:      157
-Storage modules:        20
-Foreign-camp pairs:     285
-Own-camp combinations:  157
-Duplicate chests:       0
-Duplicate storages:     0
-Duplicate pairs:        0
-Camp conflicts:         0
-Guild conflicts:        0
-Invalid camps:          0
-Missing guilds:         0
-Camps without storage:  0
-```
+## Current implementation boundary
 
-The one inactive guild contains one camp and therefore has no foreign storage target.
+The port has demonstrated one controlled invocation of
+`OnAvailableConcreteModel_ServerInternal` on an isolated populated-world
+clone.
 
-Stable process-local fingerprints:
+That call was protected by:
 
-```text
-XOR: ac771a474f28c103
-SUM: e6f7c6307a0416e9
-```
+- An explicit arm file
+- A default-disabled normal package
+- Dedicated-server validation
+- Unreal game-thread validation
+- Same-guild validation
+- Different-camp validation
+- Storage-class validation
+- Reflected function-parameter validation
+- A process-lifetime one-shot guard
 
-These fingerprints include Unreal object addresses. They should remain stable across repeated scans in one PalServer process, but are not expected to remain identical after a restart.
+The complete 285-pair registration loop is not yet enabled.
 
-### Per-guild plan
+The next engineering task is to observe the selected storage's readable
+registration state before and after the call. This is required before
+testing duplicate-call idempotency or adding reconciliation.
 
-| Guild | Chests | Storages | Foreign pairs | Own-camp excluded |
-|---|---:|---:|---:|---:|
-| `20f979c33446e7f1f8cea19499aad71a` | 22 | 3 | 44 | 22 |
-| `4fda64b78a4ae58954126eb13ec06dd3` | 3 | 1 | 0 | 3 |
-| `5c21c345d94ea28f2dd2fb842cb20be4` | 32 | 3 | 64 | 32 |
-| `64ad3b316644502f780ceebd2a31ff99` | 22 | 2 | 22 | 22 |
-| `966b6b8eca48b42eaa08b3a92e673d00` | 15 | 3 | 30 | 15 |
-| `9af4ac3e4a49def1993afeaced626523` | 31 | 4 | 93 | 31 |
-| `a21c73d1fd4d4539161573b06df671f8` | 10 | 2 | 10 | 10 |
-| `df4d6e7ea84f3b7db90b5ab07bc41b3e` | 22 | 2 | 22 | 22 |
+## Safety rules
 
-### Restoration and isolation
-
-```text
-Previous isolated mod SHA256:
-56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
-
-Baseline Level.sav SHA256:
-a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
-
-Player saves:
-19
-```
-
-The production server remained running with the same PalServer process and container start time throughout the completed acceptance run.
-
-## Next stage
-
-### Stage 4c.3 — controlled single registration
-
-The first mutation test will be restricted to:
-
-- The isolated populated-world clone
-- One real associated chest
-- One foreign storage in the same guild
-- One reflected parameter buffer
-- One game-thread invocation
-- No automatic reconciliation
-- No production deployment
-- Full save and mod snapshot restoration
-
-Before invoking the function, the implementation must validate:
-
-- Dedicated-server role
-- Unreal game-thread execution
-- Chest and storage validity
-- Same guild
-- Different owning camps
-- Exactly one compatible object input
-- Reflected parameter bounds
-- A feature gate that defaults to disabled
-- A one-shot execution guard
-
-The test must establish whether the registration call is safe and idempotent before any complete registration loop is attempted.
-
-## Later work
-
-After controlled single-pair registration succeeds:
-
-1. Validate repeated-call idempotency.
-2. Register the complete planned pair set.
-3. Add guarded periodic reconciliation.
-4. Investigate stale registration and removal behaviour.
-5. Validate world restarts and changing camp membership.
-6. Add user-facing configuration.
-7. Document installation, rollback, and troubleshooting.
-8. Produce the first usable Linux release and merge normally into `main`.
-
-## Development rules
+Development follows these boundaries:
 
 - No global `LD_PRELOAD`
 - No second UE4SS installation
-- No incoming chat `FText` mutation
-- No Windows detours or AOB hooks in the dedicated-server port
+- No Windows detours or executable AOB hooks
 - No Unreal `ProcessEvent` calls from worker threads
-- No registration mutation before explicit isolated-world acceptance
-- No production deployment before rollback and reconciliation are proven
+- No direct production mutation during development
+- No full registration loop before single-pair observability and
+  idempotency are proven
+- No incoming chat `FText` mutation
+- No assumption that a successful function return proves gameplay effect
+- Full isolated-save and mod restoration after mutation tests
 - Preserve upstream MIT attribution
+
+## Intended release path
+
+Before the first usable Linux release, the port still needs:
+
+1. Readable registration-effect observability
+2. Exact-pair idempotency validation
+3. Complete registration-plan execution
+4. Guarded periodic reconciliation
+5. Stale registration and camp-change handling
+6. Populated-world restart validation
+7. Configuration and troubleshooting documentation
+8. Production rollback instructions
+
+Stage-by-stage build identities, hashes, test evidence, and acceptance
+records are maintained separately in
+[`validation-history.md`](validation-history.md).

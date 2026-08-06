@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.2 builds a deterministic read-only same-guild, foreign-camp registration plan with pair deduplication and fingerprints.
-The registration function is never invoked; routing, item transfer and container mutation remain disabled.
+Stage 4c.3 adds a default-disabled, adjacent-arm-file-gated, process-lifetime one-shot registration call for one validated same-guild foreign-camp pair.
+The normal staged package is unarmed. Registration occurs only when dlls/main.so.stage4c3-arm exists beside main.so; full reconciliation, routing and item transfer remain disabled.
 EOF
 
 echo

@@ -48,6 +48,7 @@
 #include <atomic>
 #include <dlfcn.h>
 #include <memory>
+#include <string>
 #include <thread>
 
 namespace ModIntegratedStorageModulePin
@@ -159,6 +160,16 @@ namespace
                 chest == other.chest &&
                 storage == other.storage;
         }
+    };
+
+
+    struct RegistrationCallMetadata
+    {
+        RC::Unreal::UFunction* function{};
+        std::size_t parameter_bytes{};
+        std::int32_t parameter_offset{-1};
+        std::int32_t property_size{-1};
+        bool passed{};
     };
 
     auto mix_plan_value(std::uint64_t value) noexcept
@@ -592,6 +603,11 @@ namespace
     std::atomic_bool g_chest_association_requested{false};
     std::atomic_bool g_chest_association_running{false};
     std::atomic_bool g_chest_association_enabled{false};
+
+    std::atomic_bool g_single_registration_attempted{false};
+    std::atomic_bool g_single_registration_completed{false};
+    std::atomic_bool g_single_registration_gate_reported{false};
+    std::atomic_bool g_single_registration_blocked_reported{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -1096,6 +1112,46 @@ namespace
         return base_camp_class;
     }
 
+
+    auto stage4c3_arm_file_present() noexcept -> bool
+    {
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &ModIntegratedStorageModulePin::
+                        g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        try
+        {
+            std::string arm_path{
+                module_info.dli_fname
+            };
+
+            arm_path += ".stage4c3-arm";
+
+            return
+                ::access(
+                    arm_path.c_str(),
+                    F_OK
+                ) == 0;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
     auto request_read_only_chest_association() noexcept
         -> void
     {
@@ -1118,7 +1174,7 @@ namespace
     auto run_read_only_registration_metadata_probe(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* target_storage
-    ) -> void
+    ) -> RegistrationCallMetadata
     {
         const auto run =
             g_chest_association_runs.load(
@@ -1291,6 +1347,251 @@ namespace
             emit_marker(
                 "[ModIntegratedStorageCpp] "
                 "REG_META RESULT=INCOMPLETE"
+            );
+        }
+        return RegistrationCallMetadata{
+            function,
+            parameter_bytes,
+            parameter_offset,
+            property_size,
+            passed
+        };
+    }
+
+
+    auto run_controlled_single_registration(
+        RC::Unreal::UObject* chest,
+        RC::Unreal::UObject* chest_camp,
+        RC::Unreal::UObject* target_storage,
+        RC::Unreal::UObject* target_camp,
+        const GuildKey& planned_guild,
+        const RegistrationCallMetadata& metadata,
+        bool plan_complete,
+        std::uint64_t planned_run
+    ) -> void
+    {
+        static const bool armed =
+            stage4c3_arm_file_present();
+
+        if (
+            !g_single_registration_gate_reported.exchange(
+                true,
+                std::memory_order_acq_rel
+            )
+        )
+        {
+            if (armed)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SINGLE_REGISTER GATE=ARMED"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SINGLE_REGISTER GATE=DISABLED"
+                );
+            }
+        }
+
+        if (!armed)
+        {
+            return;
+        }
+
+        GuildKey chest_guild{};
+        GuildKey target_guild{};
+
+        const bool chest_guild_valid =
+            copy_guild_key(
+                chest_camp,
+                chest_guild
+            ) &&
+            !guid_is_zero(chest_guild);
+
+        const bool target_guild_valid =
+            copy_guild_key(
+                target_camp,
+                target_guild
+            ) &&
+            !guid_is_zero(target_guild);
+
+        const bool same_guild =
+            chest_guild_valid &&
+            target_guild_valid &&
+            chest_guild == target_guild &&
+            chest_guild == planned_guild;
+
+        const bool different_camps =
+            chest_camp != nullptr &&
+            target_camp != nullptr &&
+            chest_camp != target_camp;
+
+        const bool storage_class_valid =
+            class_is(
+                target_storage,
+                get_storage_module_class()
+            );
+
+        const bool game_thread =
+            RC::Unreal::IsInGameThreadRaw();
+
+        const bool dedicated =
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            ) == 1;
+
+        const bool parameter_layout_valid =
+            metadata.passed &&
+            metadata.function != nullptr &&
+            metadata.parameter_offset >= 0 &&
+            metadata.property_size ==
+                static_cast<std::int32_t>(
+                    sizeof(
+                        RC::Unreal::UObject*
+                    )
+                ) &&
+            metadata.parameter_bytes >=
+                sizeof(
+                    RC::Unreal::UObject*
+                ) &&
+            static_cast<std::size_t>(
+                metadata.parameter_offset
+            ) <=
+                metadata.parameter_bytes -
+                    sizeof(
+                        RC::Unreal::UObject*
+                    );
+
+        const bool safe_to_call =
+            plan_complete &&
+            chest != nullptr &&
+            target_storage != nullptr &&
+            different_camps &&
+            same_guild &&
+            storage_class_valid &&
+            game_thread &&
+            dedicated &&
+            parameter_layout_valid;
+
+        if (!safe_to_call)
+        {
+            if (
+                !g_single_registration_blocked_reported.exchange(
+                    true,
+                    std::memory_order_acq_rel
+                )
+            )
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "SINGLE_REGISTER run=%llu "
+                    "plan=%d chest=%d chest_camp=%d "
+                    "target=%d target_camp=%d "
+                    "different_camps=%d same_guild=%d "
+                    "storage_class=%d game_thread=%d "
+                    "dedicated=%d metadata=%d",
+                    static_cast<unsigned long long>(
+                        planned_run
+                    ),
+                    plan_complete ? 1 : 0,
+                    chest != nullptr ? 1 : 0,
+                    chest_camp != nullptr ? 1 : 0,
+                    target_storage != nullptr ? 1 : 0,
+                    target_camp != nullptr ? 1 : 0,
+                    different_camps ? 1 : 0,
+                    same_guild ? 1 : 0,
+                    storage_class_valid ? 1 : 0,
+                    game_thread ? 1 : 0,
+                    dedicated ? 1 : 0,
+                    parameter_layout_valid ? 1 : 0
+                );
+
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SINGLE_REGISTER RESULT=BLOCKED"
+                );
+            }
+
+            return;
+        }
+
+        bool expected_attempted{false};
+
+        if (
+            !g_single_registration_attempted.
+                compare_exchange_strong(
+                    expected_attempted,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "SINGLE_REGISTER run=%llu "
+            "plan=1 chest=1 chest_camp=1 "
+            "target=1 target_camp=1 "
+            "different_camps=1 same_guild=1 "
+            "storage_class=1 game_thread=1 "
+            "dedicated=1 metadata=1 "
+            "parms=%zu offset=%d size=%d",
+            static_cast<unsigned long long>(
+                planned_run
+            ),
+            metadata.parameter_bytes,
+            metadata.parameter_offset,
+            metadata.property_size
+        );
+
+        try
+        {
+            auto parameters =
+                std::make_unique<std::byte[]>(
+                    metadata.parameter_bytes
+                );
+
+            std::memset(
+                parameters.get(),
+                0,
+                metadata.parameter_bytes
+            );
+
+            std::memcpy(
+                parameters.get() +
+                    static_cast<std::size_t>(
+                        metadata.parameter_offset
+                    ),
+                &chest,
+                sizeof(chest)
+            );
+
+            target_storage->ProcessEvent(
+                metadata.function,
+                parameters.get()
+            );
+
+            g_single_registration_completed.store(
+                true,
+                std::memory_order_release
+            );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "SINGLE_REGISTER RESULT=CALLED"
+            );
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "SINGLE_REGISTER RESULT=EXCEPTION"
             );
         }
     }
@@ -1665,7 +1966,15 @@ namespace
             registration_probe_chest{};
 
         RC::Unreal::UObject*
+            registration_probe_chest_camp{};
+
+        RC::Unreal::UObject*
             registration_probe_target_storage{};
+
+        RC::Unreal::UObject*
+            registration_probe_target_camp{};
+
+        GuildKey registration_probe_guild{};
 
         std::size_t guilds_with_pairs{};
         std::size_t planned_chests{};
@@ -1771,8 +2080,17 @@ namespace
                         registration_probe_chest =
                             chest;
 
+                        registration_probe_chest_camp =
+                            chest_camp;
+
                         registration_probe_target_storage =
                             storage;
+
+                        registration_probe_target_camp =
+                            storage_camp;
+
+                        registration_probe_guild =
+                            guild_key;
                     }
                 }
             }
@@ -1813,6 +2131,13 @@ namespace
             registration_probe_chest != nullptr &&
             registration_probe_target_storage !=
                 nullptr &&
+            registration_probe_chest_camp !=
+                nullptr &&
+            registration_probe_target_camp !=
+                nullptr &&
+            !guid_is_zero(
+                registration_probe_guild
+            ) &&
             duplicate_chest_refs == 0 &&
             duplicate_storage_refs == 0 &&
             duplicate_pairs == 0 &&
@@ -1888,9 +2213,21 @@ namespace
             );
         }
 
-        run_read_only_registration_metadata_probe(
+        const auto registration_metadata =
+            run_read_only_registration_metadata_probe(
+                registration_probe_chest,
+                registration_probe_target_storage
+            );
+
+        run_controlled_single_registration(
             registration_probe_chest,
-            registration_probe_target_storage
+            registration_probe_chest_camp,
+            registration_probe_target_storage,
+            registration_probe_target_camp,
+            registration_probe_guild,
+            registration_metadata,
+            plan_complete,
+            planned_run
         );
 
         const auto run =
@@ -2094,12 +2431,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.2-would-register");
+                STR("0.1.0-linux-stage4c.3-single-registration");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only "
-                    "game-thread role, metadata and deterministic would-register planning."
+                    "Linux dedicated-server guarded one-shot "
+                    "registration candidate with deterministic planning."
                 );
 
             ModAuthors =
