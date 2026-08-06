@@ -3314,3 +3314,113 @@ Required work:
 
 Only after one exact membership surface is selected and statically accepted
 may a new armed before/after observation be built.
+
+
+<!-- STAGE4C4K_ACCEPTED_BEGIN -->
+## Stage 4c.4k — exact container-membership observability selection
+
+**Status:** Accepted.
+
+Stage 4c.4k selected the exact read-only surface that can be used to
+determine the group associated with a validated `PalContainerId`:
+
+`UPalItemContainerManager.GetGroupIdByItemContainerId`
+
+The selected reflected function metadata is:
+
+| Field | Accepted value |
+|---|---:|
+| `ParmsSize` | 40 bytes |
+| Inputs | 2 |
+| Returns | 1 |
+| Object inputs | 1 |
+| Struct inputs | 1 |
+| Struct returns | 1 |
+| First input | offset 0, size 8 |
+| Second input | offset 8, size 16 |
+| Return | offset 24, size 16 |
+
+The second input is the exact 16-byte `PalContainerId`. The return is a
+16-byte group identifier. Stage 4c.4k selected this surface but did **not**
+invoke it.
+
+### Rejected candidates
+
+Direct inspection of
+`UPalItemContainerManager.ItemContainerMap_InServer` is blocked.
+
+Three progressively narrower isolated probes all ended with the same
+`FMallocBinned2` allocator-corruption failure followed by signal 11:
+
+1. full map iteration over the live map;
+2. reflected map metadata plus layout only, with no entry iteration;
+3. key/value property types only, with no layout or map-data access.
+
+No direct manager-map probe remains in the accepted source or artifact.
+
+`UPalItemContainer.BelongInfo` remains insufficient for exact membership
+observation. It exposes a group identifier but no tested exact container
+identifier.
+
+### Accepted runtime evidence
+
+Candidate identity:
+
+- Source SHA-256:
+  `00bc9061532b67efaf260011e53464d2e757c119fdb16dd7e6f3d5985e14610d`
+- Artifact SHA-256:
+  `0a74a9ea8ffb3e5bac6d48b75f0cc6fce17459d9429074ea02c10a818e312654`
+- Build ID:
+  `93e1a5b418478bbba66edd53e08bbf89177d29bb`
+
+Runtime evidence directory:
+
+`/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4k-query-selection-20260806-172555`
+
+Forensic report:
+
+`/mnt/disk1/Servers/Palworld/_staging/stage4c4k-query-selection-forensics/stage4c4k-query-selection-forensics.txt`
+
+Accepted observations:
+
+- exactly one selected-query metadata line;
+- exactly one `QUERY_META RESULT=PASS`;
+- zero manager-map markers;
+- registration gate disabled;
+- zero registration calls;
+- 180 seconds of post-validation server stability;
+- zero allocator-corruption, signal-11, or segmentation-fault markers;
+- 25 complete planner, registration-metadata, and chest-association passes;
+- the initial `run=1` planner and metadata results were normal
+  pre-readiness transients, followed immediately by the complete 285-pair
+  plan;
+- the sole newly timestamped `UE4SS-crashes/crash_78.log` was empty,
+  zero bytes, and contained no crash marker;
+- isolated mod, `Level.sav`, and all 19 player saves were restored;
+- production PID `171` and
+  `StartedAt 2026-08-06T08:33:34.425634823Z` remained unchanged;
+- the normal staged package remained unarmed.
+
+### Scope boundary
+
+Stage 4c.4k proves only that
+`GetGroupIdByItemContainerId` is the selected exact observation surface and
+that its reflected layout is stable in the isolated dedicated-server
+environment.
+
+It does not prove parameter semantics beyond the reflected types and
+offsets, does not invoke the selected function, does not establish a
+before/after membership result, and does not establish registration
+idempotency or persistence.
+<!-- STAGE4C4K_ACCEPTED_END -->
+
+## Current position
+
+Stage 4c.4k is accepted.
+
+The selected exact membership-observation surface is
+`UPalItemContainerManager.GetGroupIdByItemContainerId`. Direct manager-map
+inspection is blocked, and `BelongInfo` is insufficient.
+
+**Sole next target:** Stage 4c.4l — exact selected-query parameter semantics
+and no-call parameter assembly.

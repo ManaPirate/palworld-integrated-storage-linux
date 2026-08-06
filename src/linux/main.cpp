@@ -7733,6 +7733,9 @@ namespace
     }
 
 
+
+
+
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
         RC::Unreal::UObject* chest_camp,
@@ -8853,12 +8856,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4j-semantic-observation");
+                STR("0.1.0-linux-stage4c.4k-query-surface-selection");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server controlled semantic "
-                    "before-and-after registration observation."
+                    "Linux dedicated-server exact membership query "
+                    "surface selection."
                 );
 
             ModAuthors =

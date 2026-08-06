@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4j adds a controlled semantic before-and-after registration observation probe.
-The normal staged package remains unarmed. When explicitly armed only in the isolated environment, one existing validated registration call is surrounded by one baseline, one immediate, and three delayed semantic snapshots. No second registration, full-plan execution, reconciliation, routing, item transfer, or production deployment is permitted.
+Stage 4c.4k selects the exact reflected GetGroupIdByItemContainerId membership surface.
+The normal staged package remains unarmed. Three isolated manager-map probes each ended in identical FMallocBinned2 allocator corruption, including the final type-only probe with no map layout or map data access. Direct FMapProperty key/value inspection is therefore blocked. BelongInfo cannot identify an exact container. The existing read-only metadata proves GetGroupIdByItemContainerId has one object input, one 16-byte PalContainerId input and one 16-byte group return. This build removes every added manager-map probe and selects that reflected query as the sole exact membership-observation surface for a later separately approved call. It does not invoke the query, register anything, reconcile, route, transfer items, mutate saves, or deploy to production.
 EOF
 
 echo
