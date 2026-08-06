@@ -1,5 +1,8 @@
 # Palworld Integrated Storage — Native Linux Dedicated-Server Port
 
+> **Linux port development status:** [read the current implementation and validation report](docs/linux-port-status.md)
+
+
 <!-- linux-dedicated-port-overview:start -->
 
 > [!IMPORTANT]

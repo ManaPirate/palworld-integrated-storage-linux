@@ -44,6 +44,7 @@
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
 #include <Unreal/Hooks/Hooks.hpp>
+#include <algorithm>
 #include <atomic>
 #include <dlfcn.h>
 #include <memory>
@@ -130,6 +131,121 @@ namespace
         std::size_t camp_count{};
         std::unordered_set<RC::Unreal::UObject*> storage_modules{};
     };
+
+
+    struct RegistrationPlanGuild
+    {
+        std::unordered_map<
+            RC::Unreal::UObject*,
+            RC::Unreal::UObject*
+        > chest_camps{};
+
+        std::unordered_map<
+            RC::Unreal::UObject*,
+            RC::Unreal::UObject*
+        > storage_camps{};
+    };
+
+    struct RegistrationPlanPair
+    {
+        RC::Unreal::UObject* chest{};
+        RC::Unreal::UObject* storage{};
+
+        auto operator==(
+            const RegistrationPlanPair& other
+        ) const noexcept -> bool
+        {
+            return
+                chest == other.chest &&
+                storage == other.storage;
+        }
+    };
+
+    auto mix_plan_value(std::uint64_t value) noexcept
+        -> std::uint64_t
+    {
+        value += 0x9e3779b97f4a7c15ULL;
+        value =
+            (value ^ (value >> 30)) *
+            0xbf58476d1ce4e5b9ULL;
+        value =
+            (value ^ (value >> 27)) *
+            0x94d049bb133111ebULL;
+
+        return value ^ (value >> 31);
+    }
+
+    auto guild_plan_value(
+        const GuildKey& guild_key
+    ) noexcept -> std::uint64_t
+    {
+        std::uint64_t value =
+            0xcbf29ce484222325ULL;
+
+        for (const auto byte : guild_key)
+        {
+            value ^= byte;
+            value *= 0x100000001b3ULL;
+        }
+
+        return mix_plan_value(value);
+    }
+
+    auto object_plan_value(
+        RC::Unreal::UObject* object
+    ) noexcept -> std::uint64_t
+    {
+        return mix_plan_value(
+            static_cast<std::uint64_t>(
+                reinterpret_cast<std::uintptr_t>(
+                    object
+                )
+            )
+        );
+    }
+
+    struct RegistrationPlanPairHash
+    {
+        auto operator()(
+            const RegistrationPlanPair& pair
+        ) const noexcept -> std::size_t
+        {
+            const auto chest =
+                object_plan_value(pair.chest);
+
+            const auto storage =
+                object_plan_value(pair.storage);
+
+            return static_cast<std::size_t>(
+                chest ^
+                (
+                    storage +
+                    0x9e3779b97f4a7c15ULL +
+                    (chest << 6) +
+                    (chest >> 2)
+                )
+            );
+        }
+    };
+
+    auto registration_pair_fingerprint(
+        const GuildKey& guild_key,
+        const RegistrationPlanPair& pair
+    ) noexcept -> std::uint64_t
+    {
+        const auto storage =
+            object_plan_value(pair.storage);
+
+        const auto rotated_storage =
+            (storage << 1) |
+            (storage >> 63);
+
+        return mix_plan_value(
+            guild_plan_value(guild_key) ^
+            object_plan_value(pair.chest) ^
+            rotated_storage
+        );
+    }
 
     RC::Unreal::UObject* g_pal_utility{};
     RC::Unreal::UObject* g_last_world{};
@@ -343,6 +459,76 @@ namespace
         }
 
         return nullptr;
+    }
+
+
+    template <typename Visitor>
+    auto for_each_storage_module(
+        RC::Unreal::UObject* camp,
+        Visitor&& visitor
+    ) -> std::size_t
+    {
+        if (camp == nullptr)
+        {
+            return 0;
+        }
+
+        auto* raw_modules =
+            camp->GetValuePtrByPropertyNameInChain(
+                STR("ModuleArray")
+            );
+
+        if (raw_modules == nullptr)
+        {
+            return 0;
+        }
+
+        const auto* modules =
+            static_cast<const RawTArray*>(
+                raw_modules
+            );
+
+        if (
+            modules->data == nullptr ||
+            modules->num <= 0 ||
+            modules->num > 64 ||
+            modules->max < modules->num
+        )
+        {
+            return 0;
+        }
+
+        auto** module_objects =
+            reinterpret_cast<
+                RC::Unreal::UObject**
+            >(modules->data);
+
+        std::size_t count{};
+
+        for (
+            std::int32_t index = 0;
+            index < modules->num;
+            ++index
+        )
+        {
+            auto* module =
+                module_objects[index];
+
+            if (
+                !class_is(
+                    module,
+                    get_storage_module_class()
+                )
+            )
+            {
+                continue;
+            }
+
+            visitor(module);
+            ++count;
+        }
+
+        return count;
     }
 
     auto call_pal_utility_bool(
@@ -1159,11 +1345,134 @@ namespace
             registration_probe_camps
         );
 
-        RC::Unreal::UObject*
-            registration_probe_chest{};
+        std::unordered_map<
+            GuildKey,
+            RegistrationPlanGuild,
+            GuildKeyHash
+        > registration_plan{};
 
-        RC::Unreal::UObject*
-            registration_probe_target_storage{};
+        std::unordered_map<
+            RC::Unreal::UObject*,
+            GuildKey
+        > storage_guilds{};
+
+        std::unordered_map<
+            RC::Unreal::UObject*,
+            GuildKey
+        > chest_guilds{};
+
+        std::size_t plan_null_camps{};
+        std::size_t plan_invalid_camps{};
+        std::size_t plan_missing_guild{};
+        std::size_t plan_zero_guild{};
+        std::size_t plan_without_storage{};
+
+        std::size_t duplicate_storage_refs{};
+        std::size_t storage_camp_conflicts{};
+        std::size_t storage_guild_conflicts{};
+
+        std::size_t duplicate_chest_refs{};
+        std::size_t chest_camp_conflicts{};
+        std::size_t chest_guild_conflicts{};
+
+        for (
+            auto* candidate_camp :
+                registration_probe_camps
+        )
+        {
+            if (candidate_camp == nullptr)
+            {
+                ++plan_null_camps;
+                continue;
+            }
+
+            if (
+                !association_class_is(
+                    candidate_camp,
+                    base_camp_class
+                )
+            )
+            {
+                ++plan_invalid_camps;
+                continue;
+            }
+
+            GuildKey candidate_guild{};
+
+            if (
+                !copy_guild_key(
+                    candidate_camp,
+                    candidate_guild
+                )
+            )
+            {
+                ++plan_missing_guild;
+                continue;
+            }
+
+            if (guid_is_zero(candidate_guild))
+            {
+                ++plan_zero_guild;
+                continue;
+            }
+
+            auto& guild =
+                registration_plan[
+                    candidate_guild
+                ];
+
+            const auto storage_count =
+                for_each_storage_module(
+                    candidate_camp,
+                    [&](RC::Unreal::UObject* storage)
+                    {
+                        const auto [
+                            global_iterator,
+                            global_inserted
+                        ] =
+                            storage_guilds.emplace(
+                                storage,
+                                candidate_guild
+                            );
+
+                        if (
+                            !global_inserted &&
+                            global_iterator->second !=
+                                candidate_guild
+                        )
+                        {
+                            ++storage_guild_conflicts;
+                        }
+
+                        const auto [
+                            storage_iterator,
+                            storage_inserted
+                        ] =
+                            guild.storage_camps.emplace(
+                                storage,
+                                candidate_camp
+                            );
+
+                        if (!storage_inserted)
+                        {
+                            ++duplicate_storage_refs;
+
+                            if (
+                                storage_iterator->second !=
+                                    candidate_camp
+                            )
+                            {
+                                ++storage_camp_conflicts;
+                            }
+                        }
+                    }
+                );
+
+            if (storage_count == 0)
+            {
+                ++plan_without_storage;
+            }
+        }
 
         for (auto* chest : chests)
         {
@@ -1280,53 +1589,303 @@ namespace
             ++guild_chests[guild_key];
             associated_camps.insert(camp);
 
+            auto& plan_guild =
+                registration_plan[guild_key];
+
+            const auto [
+                global_chest_iterator,
+                global_chest_inserted
+            ] =
+                chest_guilds.emplace(
+                    chest,
+                    guild_key
+                );
+
             if (
-                registration_probe_chest == nullptr
+                !global_chest_inserted &&
+                global_chest_iterator->second !=
+                    guild_key
+            )
+            {
+                ++chest_guild_conflicts;
+            }
+
+            const auto [
+                chest_iterator,
+                chest_inserted
+            ] =
+                plan_guild.chest_camps.emplace(
+                    chest,
+                    camp
+                );
+
+            if (!chest_inserted)
+            {
+                ++duplicate_chest_refs;
+
+                if (
+                    chest_iterator->second != camp
+                )
+                {
+                    ++chest_camp_conflicts;
+                }
+            }
+        }
+
+        const auto planned_run =
+            g_chest_association_runs.load(
+                std::memory_order_acquire
+            ) + 1;
+
+        std::vector<GuildKey> guild_order{};
+        guild_order.reserve(
+            registration_plan.size()
+        );
+
+        for (
+            const auto& [guild_key, ignored_guild] :
+                registration_plan
+        )
+        {
+            static_cast<void>(ignored_guild);
+            guild_order.push_back(guild_key);
+        }
+
+        std::sort(
+            guild_order.begin(),
+            guild_order.end()
+        );
+
+        std::unordered_set<
+            RegistrationPlanPair,
+            RegistrationPlanPairHash
+        > planned_pair_set{};
+
+        RC::Unreal::UObject*
+            registration_probe_chest{};
+
+        RC::Unreal::UObject*
+            registration_probe_target_storage{};
+
+        std::size_t guilds_with_pairs{};
+        std::size_t planned_chests{};
+        std::size_t planned_storages{};
+        std::size_t planned_pairs{};
+        std::size_t own_camp_pairs{};
+        std::size_t duplicate_pairs{};
+
+        std::uint64_t fingerprint_xor{};
+        std::uint64_t fingerprint_sum{};
+
+        for (const auto& guild_key : guild_order)
+        {
+            const auto guild_iterator =
+                registration_plan.find(
+                    guild_key
+                );
+
+            if (
+                guild_iterator ==
+                    registration_plan.end()
+            )
+            {
+                continue;
+            }
+
+            const auto& guild =
+                guild_iterator->second;
+
+            planned_chests +=
+                guild.chest_camps.size();
+
+            planned_storages +=
+                guild.storage_camps.size();
+
+            std::size_t guild_pairs{};
+            std::size_t guild_own_camp{};
+
+            for (
+                const auto& [
+                    chest,
+                    chest_camp
+                ] : guild.chest_camps
             )
             {
                 for (
-                    auto* candidate_camp :
-                        registration_probe_camps
+                    const auto& [
+                        storage,
+                        storage_camp
+                    ] : guild.storage_camps
                 )
                 {
-                    if (
-                        candidate_camp == nullptr ||
-                        candidate_camp == camp
-                    )
+                    if (chest_camp == storage_camp)
                     {
+                        ++guild_own_camp;
+                        ++own_camp_pairs;
                         continue;
                     }
 
-                    GuildKey candidate_guild{};
+                    const RegistrationPlanPair pair{
+                        chest,
+                        storage
+                    };
 
-                    if (
-                        !copy_guild_key(
-                            candidate_camp,
-                            candidate_guild
-                        ) ||
-                        candidate_guild != guild_key
-                    )
-                    {
-                        continue;
-                    }
-
-                    auto* candidate_storage =
-                        find_storage_module(
-                            candidate_camp
+                    const auto [
+                        ignored_pair_iterator,
+                        pair_inserted
+                    ] =
+                        planned_pair_set.insert(
+                            pair
                         );
 
-                    if (candidate_storage != nullptr)
+                    static_cast<void>(
+                        ignored_pair_iterator
+                    );
+
+                    if (!pair_inserted)
+                    {
+                        ++duplicate_pairs;
+                        continue;
+                    }
+
+                    ++guild_pairs;
+                    ++planned_pairs;
+
+                    const auto fingerprint =
+                        registration_pair_fingerprint(
+                            guild_key,
+                            pair
+                        );
+
+                    fingerprint_xor ^=
+                        fingerprint;
+
+                    fingerprint_sum +=
+                        fingerprint;
+
+                    if (
+                        registration_probe_chest ==
+                            nullptr
+                    )
                     {
                         registration_probe_chest =
                             chest;
 
                         registration_probe_target_storage =
-                            candidate_storage;
-
-                        break;
+                            storage;
                     }
                 }
             }
+
+            if (guild_pairs > 0)
+            {
+                ++guilds_with_pairs;
+            }
+
+            const auto guild_hex =
+                guid_to_hex(guild_key);
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "WOULD_REGISTER_GUILD "
+                "run=%llu guild=%s "
+                "chests=%zu storages=%zu "
+                "pairs=%zu own_camp=%zu",
+                static_cast<unsigned long long>(
+                    planned_run
+                ),
+                guild_hex.data(),
+                guild.chest_camps.size(),
+                guild.storage_camps.size(),
+                guild_pairs,
+                guild_own_camp
+            );
+        }
+
+        const bool plan_complete =
+            !registration_plan.empty() &&
+            guilds_with_pairs > 0 &&
+            planned_chests > 0 &&
+            planned_chests ==
+                associated_chests &&
+            planned_storages > 0 &&
+            planned_pairs > 0 &&
+            registration_probe_chest != nullptr &&
+            registration_probe_target_storage !=
+                nullptr &&
+            duplicate_chest_refs == 0 &&
+            duplicate_storage_refs == 0 &&
+            duplicate_pairs == 0 &&
+            chest_camp_conflicts == 0 &&
+            storage_camp_conflicts == 0 &&
+            chest_guild_conflicts == 0 &&
+            storage_guild_conflicts == 0 &&
+            plan_null_camps == 0 &&
+            plan_invalid_camps == 0 &&
+            plan_missing_guild == 0 &&
+            plan_zero_guild == 0 &&
+            plan_without_storage == 0;
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "WOULD_REGISTER run=%llu "
+            "guilds=%zu active_guilds=%zu "
+            "chests=%zu storages=%zu "
+            "pairs=%zu own_camp=%zu "
+            "duplicate_chests=%zu "
+            "duplicate_storages=%zu "
+            "duplicate_pairs=%zu "
+            "chest_camp_conflicts=%zu "
+            "storage_camp_conflicts=%zu "
+            "chest_guild_conflicts=%zu "
+            "storage_guild_conflicts=%zu "
+            "null_camps=%zu invalid_camps=%zu "
+            "missing_guild=%zu zero_guild=%zu "
+            "without_storage=%zu "
+            "fingerprint_xor=%016llx "
+            "fingerprint_sum=%016llx",
+            static_cast<unsigned long long>(
+                planned_run
+            ),
+            registration_plan.size(),
+            guilds_with_pairs,
+            planned_chests,
+            planned_storages,
+            planned_pairs,
+            own_camp_pairs,
+            duplicate_chest_refs,
+            duplicate_storage_refs,
+            duplicate_pairs,
+            chest_camp_conflicts,
+            storage_camp_conflicts,
+            chest_guild_conflicts,
+            storage_guild_conflicts,
+            plan_null_camps,
+            plan_invalid_camps,
+            plan_missing_guild,
+            plan_zero_guild,
+            plan_without_storage,
+            static_cast<unsigned long long>(
+                fingerprint_xor
+            ),
+            static_cast<unsigned long long>(
+                fingerprint_sum
+            )
+        );
+
+        if (plan_complete)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "WOULD_REGISTER RESULT=PASS"
+            );
+        }
+        else
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "WOULD_REGISTER RESULT=INCOMPLETE"
+            );
         }
 
         run_read_only_registration_metadata_probe(
@@ -1535,12 +2094,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.1f-role-metaprobe");
+                STR("0.1.0-linux-stage4c.2-would-register");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only "
-                    "game-thread role and registration metadata validation."
+                    "game-thread role, metadata and deterministic would-register planning."
                 );
 
             ModAuthors =

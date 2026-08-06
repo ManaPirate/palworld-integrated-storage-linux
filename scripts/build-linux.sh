@@ -245,7 +245,7 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.1f combines game-thread dedicated-role validation with read-only registration-function metadata inspection.
+Stage 4c.2 builds a deterministic read-only same-guild, foreign-camp registration plan with pair deduplication and fingerprints.
 The registration function is never invoked; routing, item transfer and container mutation remain disabled.
 EOF
 
