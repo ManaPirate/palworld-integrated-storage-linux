@@ -7352,57 +7352,46 @@ namespace
         }
     }
 
-    auto run_read_only_semantic_repeatability_probe(
-        const GuildKey& selected_guild,
-        bool plan_complete
+
+    auto semantic_snapshots_equal(
+        const SemanticSnapshot& left,
+        const SemanticSnapshot& right
+    ) noexcept -> bool
+    {
+        return
+            left.valid &&
+            right.valid &&
+            left.fingerprint == right.fingerprint &&
+            left.slot_count == right.slot_count &&
+            left.nonnull_slots == right.nonnull_slots &&
+            left.fully_read_slots == right.fully_read_slots &&
+            left.container_bytes == right.container_bytes &&
+            left.item_bytes == right.item_bytes &&
+            left.stack_bytes == right.stack_bytes &&
+            left.exceptions == right.exceptions;
+    }
+
+    auto emit_semantic_observation_snapshot(
+        const char* phase,
+        std::uint64_t sample,
+        std::uint64_t delay_seconds,
+        const SemanticSnapshot& snapshot
     ) noexcept -> void
     {
-        if (
-            !plan_complete ||
-            g_semantic_repeatability_complete.load(
-                std::memory_order_acquire
-            )
-        )
-        {
-            return;
-        }
-
-        using Clock = std::chrono::steady_clock;
-
-        static bool initialized{};
-        static Clock::time_point next_sample{};
-        static std::uint64_t sample_count{};
-        static std::uint64_t matching_samples{};
-        static std::uint64_t baseline_fingerprint{};
-        static std::int32_t baseline_slot_count{-1};
-
-        const auto now = Clock::now();
-
-        if (!initialized)
-        {
-            initialized = true;
-            next_sample = now;
-        }
-
-        if (now < next_sample)
-        {
-            return;
-        }
-
-        const auto snapshot =
-            build_semantic_snapshot(selected_guild);
-
         emit_format(
             "[ModIntegratedStorageCpp] "
-            "SEMANTIC_SAMPLE sample=%llu valid=%d "
+            "SEMANTIC_OBSERVATION phase=%s sample=%llu "
+            "delay_seconds=%llu valid=%d "
             "slot_count=%d nonnull_slots=%llu "
             "fully_read_slots=%llu "
             "container_bytes=%llu item_bytes=%llu "
             "stack_bytes=%llu exceptions=%llu "
             "fingerprint=%016llx "
             "cross_restart_stable=0",
+            phase,
+            static_cast<unsigned long long>(sample),
             static_cast<unsigned long long>(
-                sample_count
+                delay_seconds
             ),
             snapshot.valid ? 1 : 0,
             snapshot.slot_count,
@@ -7428,8 +7417,308 @@ namespace
                 snapshot.fingerprint
             )
         );
+    }
 
-        if (!snapshot.valid)
+    auto run_controlled_semantic_observation(
+        const GuildKey& selected_guild,
+        bool plan_complete,
+        bool post_registration
+    ) noexcept -> void
+    {
+        if (
+            !plan_complete ||
+            g_semantic_repeatability_complete.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        using Clock = std::chrono::steady_clock;
+
+        static bool baseline_captured{};
+        static bool immediate_captured{};
+        static GuildKey baseline_guild{};
+        static SemanticSnapshot baseline{};
+        static SemanticSnapshot immediate{};
+        static SemanticSnapshot first_delayed{};
+        static Clock::time_point next_delayed{};
+        static std::uint64_t delayed_samples{};
+        static std::uint64_t delayed_matches_baseline{};
+        static std::uint64_t delayed_matches_immediate{};
+        static std::uint64_t delayed_matches_first{};
+
+        try
+        {
+            const auto now = Clock::now();
+
+            if (!baseline_captured)
+            {
+                if (post_registration)
+                {
+                    return;
+                }
+
+                baseline_guild = selected_guild;
+
+                baseline =
+                    build_semantic_snapshot(selected_guild);
+
+                emit_semantic_observation_snapshot(
+                    "baseline",
+                    0,
+                    0,
+                    baseline
+                );
+
+                if (!baseline.valid)
+                {
+                    g_semantic_repeatability_complete.store(
+                        true,
+                        std::memory_order_release
+                    );
+
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "SEMANTIC_OBSERVATION RESULT=INCOMPLETE"
+                    );
+                    return;
+                }
+
+                baseline_captured = true;
+                return;
+            }
+
+            if (!(selected_guild == baseline_guild))
+            {
+                g_semantic_repeatability_complete.store(
+                    true,
+                    std::memory_order_release
+                );
+
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_OBSERVATION RESULT=INCOMPLETE"
+                );
+                return;
+            }
+
+            if (!post_registration)
+            {
+                return;
+            }
+
+            if (
+                !g_single_registration_completed.load(
+                    std::memory_order_acquire
+                )
+            )
+            {
+                return;
+            }
+
+            if (!immediate_captured)
+            {
+                immediate =
+                    build_semantic_snapshot(selected_guild);
+
+                emit_semantic_observation_snapshot(
+                    "immediate",
+                    1,
+                    0,
+                    immediate
+                );
+
+                if (!immediate.valid)
+                {
+                    g_semantic_repeatability_complete.store(
+                        true,
+                        std::memory_order_release
+                    );
+
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "SEMANTIC_OBSERVATION RESULT=INCOMPLETE"
+                    );
+                    return;
+                }
+
+                immediate_captured = true;
+                next_delayed =
+                    now + std::chrono::seconds(5);
+                return;
+            }
+
+            if (now < next_delayed)
+            {
+                return;
+            }
+
+            const auto delayed =
+                build_semantic_snapshot(selected_guild);
+
+            const auto delayed_index =
+                delayed_samples + 1;
+
+            emit_semantic_observation_snapshot(
+                "delayed",
+                delayed_index + 1,
+                delayed_index * 5,
+                delayed
+            );
+
+            if (!delayed.valid)
+            {
+                g_semantic_repeatability_complete.store(
+                    true,
+                    std::memory_order_release
+                );
+
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_OBSERVATION RESULT=INCOMPLETE"
+                );
+                return;
+            }
+
+            if (delayed_samples == 0)
+            {
+                first_delayed = delayed;
+                delayed_matches_first = 1;
+            }
+            else if (
+                semantic_snapshots_equal(
+                    delayed,
+                    first_delayed
+                )
+            )
+            {
+                ++delayed_matches_first;
+            }
+
+            if (
+                semantic_snapshots_equal(
+                    delayed,
+                    baseline
+                )
+            )
+            {
+                ++delayed_matches_baseline;
+            }
+
+            if (
+                semantic_snapshots_equal(
+                    delayed,
+                    immediate
+                )
+            )
+            {
+                ++delayed_matches_immediate;
+            }
+
+            ++delayed_samples;
+
+            if (delayed_samples < 3)
+            {
+                next_delayed =
+                    now + std::chrono::seconds(5);
+                return;
+            }
+
+            const bool immediate_changed =
+                !semantic_snapshots_equal(
+                    immediate,
+                    baseline
+                );
+
+            const bool delayed_changed =
+                !semantic_snapshots_equal(
+                    first_delayed,
+                    baseline
+                );
+
+            const bool delayed_consistent =
+                delayed_matches_first ==
+                    delayed_samples;
+
+            const bool retained_change =
+                delayed_changed &&
+                delayed_consistent;
+
+            const bool unchanged =
+                !immediate_changed &&
+                delayed_matches_baseline ==
+                    delayed_samples;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "SEMANTIC_OBSERVATION "
+                "samples=5 delayed_samples=%llu "
+                "delayed_matches_baseline=%llu "
+                "delayed_matches_immediate=%llu "
+                "delayed_matches_first=%llu "
+                "baseline_fingerprint=%016llx "
+                "immediate_fingerprint=%016llx "
+                "delayed_fingerprint=%016llx "
+                "immediate_changed=%d delayed_changed=%d "
+                "delayed_consistent=%d retained_change=%d "
+                "cross_restart_stable=0",
+                static_cast<unsigned long long>(
+                    delayed_samples
+                ),
+                static_cast<unsigned long long>(
+                    delayed_matches_baseline
+                ),
+                static_cast<unsigned long long>(
+                    delayed_matches_immediate
+                ),
+                static_cast<unsigned long long>(
+                    delayed_matches_first
+                ),
+                static_cast<unsigned long long>(
+                    baseline.fingerprint
+                ),
+                static_cast<unsigned long long>(
+                    immediate.fingerprint
+                ),
+                static_cast<unsigned long long>(
+                    first_delayed.fingerprint
+                ),
+                immediate_changed ? 1 : 0,
+                delayed_changed ? 1 : 0,
+                delayed_consistent ? 1 : 0,
+                retained_change ? 1 : 0
+            );
+
+            g_semantic_repeatability_complete.store(
+                true,
+                std::memory_order_release
+            );
+
+            if (retained_change)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_OBSERVATION RESULT=CHANGED"
+                );
+            }
+            else if (unchanged)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_OBSERVATION RESULT=UNCHANGED"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_OBSERVATION RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
         {
             g_semantic_repeatability_complete.store(
                 true,
@@ -7438,74 +7727,11 @@ namespace
 
             emit_marker(
                 "[ModIntegratedStorageCpp] "
-                "SEMANTIC_REPEATABILITY RESULT=INCOMPLETE"
+                "SEMANTIC_OBSERVATION RESULT=EXCEPTION"
             );
-            return;
         }
-
-        if (sample_count == 0)
-        {
-            baseline_fingerprint = snapshot.fingerprint;
-            baseline_slot_count = snapshot.slot_count;
-            matching_samples = 1;
-        }
-        else if (
-            snapshot.fingerprint ==
-                baseline_fingerprint &&
-            snapshot.slot_count ==
-                baseline_slot_count
-        )
-        {
-            ++matching_samples;
-        }
-
-        ++sample_count;
-
-        if (sample_count >= 3)
-        {
-            emit_format(
-                "[ModIntegratedStorageCpp] "
-                "SEMANTIC_REPEATABILITY "
-                "samples=%llu matching_samples=%llu "
-                "slot_count=%d fingerprint=%016llx "
-                "cross_restart_stable=0",
-                static_cast<unsigned long long>(
-                    sample_count
-                ),
-                static_cast<unsigned long long>(
-                    matching_samples
-                ),
-                baseline_slot_count,
-                static_cast<unsigned long long>(
-                    baseline_fingerprint
-                )
-            );
-
-            g_semantic_repeatability_complete.store(
-                true,
-                std::memory_order_release
-            );
-
-            if (matching_samples == sample_count)
-            {
-                emit_marker(
-                    "[ModIntegratedStorageCpp] "
-                    "SEMANTIC_REPEATABILITY RESULT=PASS"
-                );
-            }
-            else
-            {
-                emit_marker(
-                    "[ModIntegratedStorageCpp] "
-                    "SEMANTIC_REPEATABILITY RESULT=INCOMPLETE"
-                );
-            }
-            return;
-        }
-
-        next_sample =
-            now + std::chrono::seconds(5);
     }
+
 
     auto run_controlled_single_registration(
         RC::Unreal::UObject* chest,
@@ -8403,9 +8629,10 @@ namespace
             plan_complete
         );
 
-        run_read_only_semantic_repeatability_probe(
+        run_controlled_semantic_observation(
             registration_probe_guild,
-            plan_complete
+            plan_complete,
+            false
         );
 
         run_controlled_single_registration(
@@ -8417,6 +8644,12 @@ namespace
             registration_metadata,
             plan_complete,
             planned_run
+        );
+
+        run_controlled_semantic_observation(
+            registration_probe_guild,
+            plan_complete,
+            true
         );
 
         const auto run =
@@ -8620,12 +8853,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.4i-semantic-repeatability");
+                STR("0.1.0-linux-stage4c.4j-semantic-observation");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server complete semantic "
-                    "fingerprint repeatability probe."
+                    "Linux dedicated-server controlled semantic "
+                    "before-and-after registration observation."
                 );
 
             ModAuthors =

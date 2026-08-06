@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4i adds a complete read-only semantic fingerprint repeatability probe.
-The normal staged package remains unarmed. Three same-process snapshots hash only the proven PalContainerId, PalItemId and StackCount layouts. The probe adds no ProcessEvent call, invokes no reflected function, and performs no registration or reconciliation.
+Stage 4c.4j adds a controlled semantic before-and-after registration observation probe.
+The normal staged package remains unarmed. When explicitly armed only in the isolated environment, one existing validated registration call is surrounded by one baseline, one immediate, and three delayed semantic snapshots. No second registration, full-plan execution, reconciliation, routing, item transfer, or production deployment is permitted.
 EOF
 
 echo

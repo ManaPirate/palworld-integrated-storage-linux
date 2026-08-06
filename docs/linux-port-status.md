@@ -22,50 +22,56 @@ description.
 ---
 
 ## 1. Current position
+
 ### Current accepted stage
 
 ```text
-Stage 4c.4i — complete semantic fingerprint repeatability
+Stage 4c.4j — controlled semantic before/after registration observation
 ```
 
 Accepted commit baseline:
 
 ```text
-f344f608ba91b7b6cd9f0b591b8cdb46ee7444c1
+586d6d76840aba614982560f5ede74b9774de5c6
 ```
 
 Accepted candidate identity:
 
 ```text
 Source SHA256:
-dd643713610ee6df4cc2edc8885b39aea1dd669fd6ace15622e7d1c24e81bc09
+45ba3f973c9a55056ac4ba4c259eedda08b38ce54354e8ebcf257fc1a023bb89
 
 Artifact SHA256:
-d1a813ae83faaf7b8d57d8ae7179e8c79f288f4c77b6cad9b74b02324fa66024
+063b010391e7af1d2a62aa0931646eafbdff8cdb809fbc14e501e9530d191982
 
 Build ID:
-beb86f657164492a8b0fdd4b191261ad35620a3d
+b9ac1d68efbb3d70fffbeffbcf2621f6e8269347
 ```
 
 Accepted runtime evidence:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4i-semantic-repeatability-20260806-141404
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619
 ```
 
-Accepted same-process semantic baseline:
+Accepted same-process observation:
 
 ```text
-Slots:                 54
-Non-null slots:        54
-Fully read slots:      54
-Container bytes:       864
-Item bytes:            2160
-Stack bytes:           216
-Exceptions:            0
-Fingerprint:           27db2634ac8df4c6
-Matching snapshots:    3 / 3
-Cross-restart stable:  not claimed
+Observation result:       UNCHANGED
+Semantic snapshots:       5
+Slots:                    54
+Non-null slots:           54
+Fully read slots:         54
+Container bytes:          864
+Item bytes:               2160
+Stack bytes:              216
+Exceptions:               0
+Baseline fingerprint:     ca861a76f7cbc1b4
+Immediate fingerprint:    ca861a76f7cbc1b4
+Delayed fingerprint:      ca861a76f7cbc1b4
+Delayed matches baseline: 3 / 3
+Retained change:          no
+Cross-process comparison: not performed
 ```
 
 ### What is currently proven
@@ -77,43 +83,44 @@ Cross-restart stable:  not claimed
 4. Guarded execution of exactly one isolated registration call.
 5. Deterministic selection of the planner guild aggregate.
 6. Read-only validation of all 54 aggregate `UPalItemSlot` objects.
-7. `PalContainerId` is exactly one 16-byte `FGuid`.
-8. `FGuid` is exactly four 4-byte numeric fields with no padding.
-9. `PalItemSlotId` is a 16-byte `PalContainerId` followed by a
-   4-byte numeric slot index.
-10. `PalItemId` is an 8-byte `FName` followed by a 32-byte
-    `PalDynamicItemId`.
-11. `PalDynamicItemId` is exactly two consecutive 16-byte `FGuid`
-    structures.
-12. The complete container, item, slot-index, and stack-count
-    representations can be hashed without reading unknown padding.
-13. A complete identity-and-stack fingerprint is stable across three
-    snapshots taken five seconds apart in one idle server process.
-14. Every one of the 54 slots was non-null and fully readable during the
-    accepted repeatability run.
+7. `PalContainerId`, `PalItemSlotId`, `PalItemId`, and
+   `PalDynamicItemId` have complete validated layouts for semantic
+   fingerprinting.
+8. A complete identity-and-stack fingerprint is repeatable within one idle
+   PalServer process.
+9. One explicitly armed registration call completed with the exact validated
+   foreign-chest and target-storage tuple.
+10. The selected guild aggregate retained the same 54 slot identities and
+    stack counts immediately after that call and at 5, 10, and 15 seconds.
+11. The isolated server remained stable for 180 seconds after the observation.
+12. The isolated mod and populated-world save were restored exactly.
+13. Production PID and container `StartedAt` remained unchanged.
 
 ### What is not yet proven
 
-1. That the controlled registration call changes aggregate item
-   identity, stack counts, membership, or visibility.
-2. Registration idempotency.
-3. Removal behavior.
-4. Full-plan registration and reconciliation.
-5. Persistence across restart.
-6. Player-visible integrated storage behavior.
+1. Which state, if any, the registration call changes.
+2. Container-manager membership or container-to-group ownership changes.
+3. `BelongInfo`, routing, or visibility changes.
+4. Registration idempotency.
+5. Removal behavior.
+6. Full-plan registration and reconciliation.
+7. Persistence across restart.
+8. Player-visible integrated storage behavior.
 
 ### Next stage
 
 ```text
-Stage 4c.4j — controlled semantic before/after registration observation
+Stage 4c.4k — exact container-membership observability selection
 ```
 
-The next stage must remain isolated and arm-file gated. It may perform
-exactly one already-validated registration call, surrounded by semantic
-snapshots of the selected guild aggregate.
+The next stage is read-only. It must select and statically validate one exact
+container-membership surface capable of observing the already-validated
+foreign chest before and after registration.
 
-It must not perform a second registration call, execute the full plan,
-reconcile, test item transfer, or touch production.
+Candidate surfaces are limited to the previously surveyed
+`ItemContainerMap_InServer`, `BelongInfo`, and exact container-to-group query
+metadata. No reflected function may be called and no registration may be
+performed during the selection stage.
 
 ## 2. Repository and branch strategy
 
@@ -657,68 +664,26 @@ call.
 
 ## 8. Accepted commit history
 
-The following branch commits form the accepted engineering baseline
-through Stage 4c.4h. Stage 4c.4i was built and validated on the final
-commit listed here and is committed by the current documentation update.
-
-```text
-4bd97c9
-docs: add NullPrism Linux port plan
-
-ff39c1f
-docs: identify project as Linux NullPrism port
-
-1cc4482
-feat(linux): add NullPrism lifecycle scaffold
-
-82a65b2
-feat(linux): validate populated storage discovery
-
-0a66c8d
-docs: explain native Linux dedicated-server port
-
-debf0e1
-feat(linux): associate chests with camps and guilds
-
-b0017c8
-fix(linux): resolve dedicated role on game thread
-
-e53faa1
-feat(linux): validate registration metadata read-only
-
-153a3c3
-feat(linux): add deterministic registration planner
-
-6c8f0ff
-feat(linux): validate controlled single registration
-
-ea84ea6
-docs: align project overview and port runsheet
-
-7a76231
-feat(linux): map storage observability surfaces
-
-00ffb61
-feat(linux): map aggregate container queries
-
-03e3907
-feat(linux): map guild aggregate layout
-
-f5005b4
-docs: repair active Linux port status
-
-ea9fbca
-feat(linux): fingerprint aggregate item slots
-
-def2cf9
-feat(linux): map nested slot identity
-
-ab94c53
-docs: record ordinal identity survey
-
-f344f60
-feat(linux): map ordinal item identity
-```
+- `4bd97c99872be1e549e43373d5b320b28da7612d` — docs: add NullPrism Linux port plan
+- `ff39c1fb7cd9ad8fee68b321a22b55871491c11b` — docs: identify project as Linux NullPrism port
+- `1cc4482fdf57cb5194b6701630304189262070d1` — feat(linux): add NullPrism lifecycle scaffold
+- `82a65b28c1850532f758f42d0db3d40f86b6554d` — feat(linux): validate populated storage discovery
+- `0a66c8d20d409a528dd9abeb72a42466cf766938` — docs: explain native Linux dedicated-server port
+- `debf0e1f20dbdcc4bff8319a641845ae57761412` — feat(linux): associate chests with camps and guilds
+- `b0017c8b48c2e84acdb1de74c5beff146df889fe` — fix(linux): resolve dedicated role on game thread
+- `e53faa1adb639858f22220877d374b48b0cef706` — feat(linux): validate registration metadata read-only
+- `153a3c35f0d14f4dbd679659daa6a246e18aa165` — feat(linux): add deterministic registration planner
+- `6c8f0ffe644da81c210fc635b1101a72ab746464` — feat(linux): validate controlled single registration
+- `ea84ea69cbfa351a50cd3da14ff7650895a9df42` — docs: align project overview and port runsheet
+- `7a76231e42afd690c4dbf0b0fa3cb8c36cd91cb7` — feat(linux): map storage observability surfaces
+- `00ffb619444497da31ba28b0a998358a32d28249` — feat(linux): map aggregate container queries
+- `03e39072695e41a84dec13c5854e924f9c2e0726` — feat(linux): map guild aggregate layout
+- `f5005b44a8e5d1b120e102259c5c47e38e7a0e60` — docs: repair active Linux port status
+- `ea9fbca0ba90f46ad1c1fea6b10d1f9d07da568e` — feat(linux): fingerprint aggregate item slots
+- `def2cf9a754ec40d815b1a68f138089bca0c9fa3` — feat(linux): map nested slot identity
+- `ab94c5374ce9ecc04839b5b7ace45c052a8bfb9b` — docs: record ordinal identity survey
+- `f344f608ba91b7b6cd9f0b591b8cdb46ee7444c1` — feat(linux): map ordinal item identity
+- `586d6d76840aba614982560f5ede74b9774de5c6` — feat(linux): validate semantic fingerprint repeatability
 
 ## 9. Stage-by-stage runsheet
 
@@ -1706,6 +1671,13 @@ to prevent recurrence.
 
 ---
 
+- A semantic fingerprint containing an embedded `FName` is
+  same-process evidence only. Runtime harnesses must not compare it with a
+  fingerprint produced by another PalServer process.
+- A pre-readiness `SINGLE_REGISTER RESULT=BLOCKED` scan performs no
+  `ProcessEvent` call. Harnesses must distinguish registration detail lines
+  from the sole `RESULT=CALLED` mutation.
+
 ## 11. Current safety rules
 
 The following rules remain mandatory:
@@ -1885,58 +1857,49 @@ The first usable release requires:
 
 ## 14. Latest evidence paths
 
+### Accepted Stage 4c.4j runtime evidence
+
 ```text
-Stage 4b.1:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b1-populated-20260806-062026
-
-Stage 4b.2a:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2a-thread-20260806-064245
-
-Stage 4b.2:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4b2-retry-20260806-071924
-
-Stage 4c.1d:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1d-metaprobe-20260806-070751
-
-Stage 4c.1e:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1e-role-thread-20260806-073648
-
-Stage 4c.1f:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c1f-combined-20260806-075812
-
-Stage 4c.2:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c2-plan-20260806-083809
-
-Stage 4c.3 unarmed:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-unarmed-20260806-095324
-
-Stage 4c.3 armed:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c3-armed-20260806-100441
-
-Stage 4c.4b:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4b-metadata-20260806-110734
-
-Stage 4c.4c:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4c-linkage-20260806-111750
-
-Stage 4c.4d:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4d-query-metadata-20260806-114102
-
-Stage 4c.4e:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4e-deep-layout-20260806-121059
-
-Stage 4c.4f:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4f-slot-fingerprint-20260806-125800
-
-Stage 4c.4g:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4g-slot-layout-20260806-131852
-
-Stage 4c.4h:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4h-ordinal-layout-20260806-134213
-
-Stage 4c.4i:
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4i-semantic-repeatability-20260806-141404
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619
 ```
+
+Semantic observation log:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619/semantic-observation-lines.log
+```
+
+Accepted result:
+
+```text
+SEMANTIC_OBSERVATION RESULT=UNCHANGED
+```
+
+Restored isolated state:
+
+```text
+Mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Player saves:
+19
+```
+
+Production invariant:
+
+```text
+PID:
+171
+
+StartedAt:
+2026-08-06T08:33:34.425634823Z
+```
+
+Earlier accepted evidence paths remain recorded in their chronological stage
+sections below.
 
 ## 15. Stage 4c.4a — class-specific observability survey
 
@@ -3174,33 +3137,180 @@ The embedded `FName` remains process-local. Stage 4c.4i therefore makes
 no cross-restart stability or persistence claim.
 
 ---
-## 26. Immediate next action
+## 26. Stage 4c.4j — controlled semantic before/after registration observation
 
-Run Stage 4c.4j:
+### Goal
+
+Determine whether the existing validated one-shot registration call changes
+the selected guild aggregate's complete slot identity-and-stack state.
+
+The candidate reused the existing `.stage4c3-arm` gate and the sole
+`target_storage->ProcessEvent(...)` call site. It added no new
+`ProcessEvent` call.
+
+### Candidate identity
 
 ```text
-controlled semantic before/after registration observation
+Version:
+0.1.0-linux-stage4c.4j-semantic-observation
+
+Source SHA256:
+45ba3f973c9a55056ac4ba4c259eedda08b38ce54354e8ebcf257fc1a023bb89
+
+Artifact SHA256:
+063b010391e7af1d2a62aa0931646eafbdff8cdb809fbc14e501e9530d191982
+
+Build ID:
+b9ac1d68efbb3d70fffbeffbcf2621f6e8269347
+```
+
+The normal staged package remained unarmed.
+
+### Observation design
+
+The armed isolated run captured:
+
+1. One complete semantic baseline before registration.
+2. One immediate snapshot after the call returned.
+3. Three delayed snapshots at 5, 10, and 15 seconds.
+4. A 180-second post-observation stability window.
+
+Every snapshot covered the exact validated representation of all 54 slots:
+
+```text
+54 × 16-byte PalContainerId
+54 × 40-byte PalItemId
+54 × 4-byte StackCount
+```
+
+The probe classified results as `CHANGED`, `UNCHANGED`, `INCOMPLETE`, or
+`EXCEPTION`.
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619
+```
+
+Exactly one ready registration call completed:
+
+```text
+plan=1
+chest=1
+chest_camp=1
+target=1
+target_camp=1
+different_camps=1
+same_guild=1
+storage_class=1
+game_thread=1
+dedicated=1
+metadata=1
+parms=8
+offset=0
+size=8
+```
+
+One earlier pre-readiness scan returned `RESULT=BLOCKED`. It had
+`plan=0`, performed no `ProcessEvent` call, and did not consume the later
+ready registration.
+
+All five snapshots were complete and identical:
+
+| Phase | Delay | Slots | Non-null | Fully read | Exceptions | Fingerprint |
+|---|---:|---:|---:|---:|---:|---|
+| Baseline | 0 s | 54 | 54 | 54 | 0 | `ca861a76f7cbc1b4` |
+| Immediate | 0 s | 54 | 54 | 54 | 0 | `ca861a76f7cbc1b4` |
+| Delayed | 5 s | 54 | 54 | 54 | 0 | `ca861a76f7cbc1b4` |
+| Delayed | 10 s | 54 | 54 | 54 | 0 | `ca861a76f7cbc1b4` |
+| Delayed | 15 s | 54 | 54 | 54 | 0 | `ca861a76f7cbc1b4` |
+
+Result:
+
+```text
+SEMANTIC_OBSERVATION RESULT=UNCHANGED
+immediate_changed=0
+delayed_changed=0
+delayed_consistent=1
+retained_change=0
+cross_restart_stable=0
+```
+
+The server remained stable for 180 seconds after the observation. There were
+no invalid-thread markers, registration exceptions, other probe exceptions,
+crash markers, or new crash files.
+
+### Restoration and production isolation
+
+The isolated environment was restored exactly:
+
+```text
+Restored isolated mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Restored Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Restored player saves:
+19
+```
+
+Production remained unchanged:
+
+```text
+PalServer PID:
+171
+
+Container StartedAt:
+2026-08-06T08:33:34.425634823Z
+```
+
+### Accepted interpretation
+
+The controlled registration call produced no observable change to the
+selected guild aggregate's slot membership, item identities, or stack counts
+during the 15-second semantic observation window.
+
+This does not prove that registration had no effect. The effect may instead
+exist in container-manager membership, container-to-group ownership,
+`BelongInfo`, routing, visibility, or another state surface outside the 54
+aggregate slots.
+
+The pre-restoration `Level.sav` hash changed while the server was running,
+but that cannot be attributed specifically to registration. No persistence
+claim is made.
+
+Registration idempotency remains blocked.
+
+---
+## 27. Immediate next action
+
+Run Stage 4c.4k:
+
+```text
+exact container-membership observability selection
 ```
 
 Required work:
 
-1. Start from the accepted populated-world save and unarmed package.
-2. Capture a complete semantic baseline for the selected guild aggregate.
-3. Arm only the existing adjacent Stage 4c.3 one-shot gate in the
-   isolated environment.
-4. Execute exactly one already-validated foreign-chest registration pair.
-5. Capture an immediate semantic snapshot and repeated delayed snapshots
-   during the stability window.
-6. Compare slot count, non-null count, fully-read count, component-byte
-   totals, and complete fingerprint against the baseline.
-7. Report whether the call produced a deterministic and retained semantic
-   change.
-8. Do not perform a second registration call.
-9. Do not execute the 285-pair plan, reconcile, test item transfer, or
-   touch production.
-10. Restore the isolated mod and save, then verify production PID and
-    container start time are unchanged.
+1. Start from commit `586d6d76840aba614982560f5ede74b9774de5c6` with the accepted Stage 4c.4j source
+   modifications present and the normal staged package unarmed.
+2. Identify the exact foreign chest container identity already selected by
+   the planner.
+3. Compare the previously surveyed `ItemContainerMap_InServer`,
+   `BelongInfo`, and exact container-to-group query metadata as read-only
+   observation candidates.
+4. Select one surface that can represent membership for that exact container
+   without pointer-only or cross-process assumptions.
+5. Record the exact property, key, value, offsets, sizes, and access method
+   required for a future before/after probe.
+6. Add no `ProcessEvent` call and invoke no reflected function.
+7. Perform no registration, second call, full-plan execution, reconciliation,
+   routing, item transfer, save mutation, or production deployment.
+8. Leave the repository, staged package, isolated save, and production
+   environment unchanged.
 
-An unchanged fingerprint is still a valid observational result, but it
-does not satisfy effect observability. Exact-pair idempotency must remain
-blocked until a specific retained registration effect is demonstrated.
+Only after one exact membership surface is selected and statically accepted
+may a new armed before/after observation be built.
