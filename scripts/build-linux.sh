@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.1e game-thread dedicated-server role validation with atomic cross-thread role state.
-Discovery and chest association remain read-only; registration, routing and container mutation are disabled.
+Stage 4c.1f combines game-thread dedicated-role validation with read-only registration-function metadata inspection.
+The registration function is never invoked; routing, item transfer and container mutation remain disabled.
 EOF
 
 echo

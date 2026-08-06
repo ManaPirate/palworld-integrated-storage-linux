@@ -39,6 +39,7 @@
 #include <Mod/CppUserModBase.hpp>
 
 #include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
@@ -730,6 +731,18 @@ namespace
         return nullptr;
     }
 
+
+    auto get_registration_probe_camp_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        // Process-lifetime allocation avoids releasing vector storage
+        // across the native-mod and NullPrism runtime boundary.
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
     auto run_read_only_discovery() -> void
     {
         auto& camps = get_camp_discovery_buffer();
@@ -915,6 +928,187 @@ namespace
         );
     }
 
+
+    auto run_read_only_registration_metadata_probe(
+        RC::Unreal::UObject* chest,
+        RC::Unreal::UObject* target_storage
+    ) -> void
+    {
+        const auto run =
+            g_chest_association_runs.load(
+                std::memory_order_acquire
+            ) + 1;
+
+        RC::Unreal::UFunction* function{};
+
+        if (target_storage != nullptr)
+        {
+            function =
+                target_storage->
+                    GetFunctionByNameInChain(
+                        STR(
+                            "OnAvailableConcreteModel_"
+                            "ServerInternal"
+                        )
+                    );
+        }
+
+        std::size_t parameter_bytes{};
+        std::size_t input_parameters{};
+        std::size_t object_parameters{};
+
+        RC::Unreal::FObjectProperty*
+            object_parameter{};
+
+        if (function != nullptr)
+        {
+            parameter_bytes =
+                static_cast<std::size_t>(
+                    function->GetParmsSize()
+                );
+
+            for (
+                auto* property :
+                    function->ForEachProperty()
+            )
+            {
+                if (
+                    property == nullptr ||
+                    !property->HasAnyPropertyFlags(
+                        RC::Unreal::CPF_Parm
+                    ) ||
+                    property->HasAnyPropertyFlags(
+                        RC::Unreal::CPF_ReturnParm
+                    )
+                )
+                {
+                    continue;
+                }
+
+                ++input_parameters;
+
+                auto* object_property =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FObjectProperty
+                    >(property);
+
+                if (object_property != nullptr)
+                {
+                    ++object_parameters;
+
+                    if (object_parameter == nullptr)
+                    {
+                        object_parameter =
+                            object_property;
+                    }
+                }
+            }
+        }
+
+        std::int32_t parameter_offset{-1};
+        std::int32_t property_size{-1};
+        std::uint64_t property_flags{};
+
+        RC::Unreal::UClass* property_class{};
+
+        if (object_parameter != nullptr)
+        {
+            parameter_offset =
+                object_parameter->
+                    GetOffset_Internal();
+
+            property_size =
+                object_parameter->GetSize();
+
+            property_flags =
+                static_cast<std::uint64_t>(
+                    object_parameter->
+                        GetPropertyFlags()
+                );
+
+            property_class =
+                object_parameter->
+                    GetPropertyClass();
+        }
+
+        const bool bounds_valid =
+            parameter_offset >= 0 &&
+            property_size ==
+                static_cast<std::int32_t>(
+                    sizeof(
+                        RC::Unreal::UObject*
+                    )
+                ) &&
+            parameter_bytes >=
+                sizeof(
+                    RC::Unreal::UObject*
+                ) &&
+            static_cast<std::size_t>(
+                parameter_offset
+            ) <=
+                parameter_bytes -
+                    sizeof(
+                        RC::Unreal::UObject*
+                    );
+
+        const bool chest_compatible =
+            class_is(
+                chest,
+                property_class
+            );
+
+        const bool passed =
+            chest != nullptr &&
+            target_storage != nullptr &&
+            function != nullptr &&
+            input_parameters == 1 &&
+            object_parameters == 1 &&
+            object_parameter != nullptr &&
+            property_class != nullptr &&
+            bounds_valid &&
+            chest_compatible;
+
+        emit_format(
+            "[ModIntegratedStorageCpp] REG_META "
+            "run=%llu candidate=%d target=%d "
+            "function=%d parms=%zu inputs=%zu "
+            "object_inputs=%zu offset=%d size=%d "
+            "flags=0x%llx property_class=%d "
+            "compatible=%d",
+            static_cast<unsigned long long>(
+                run
+            ),
+            chest != nullptr ? 1 : 0,
+            target_storage != nullptr ? 1 : 0,
+            function != nullptr ? 1 : 0,
+            parameter_bytes,
+            input_parameters,
+            object_parameters,
+            parameter_offset,
+            property_size,
+            static_cast<unsigned long long>(
+                property_flags
+            ),
+            property_class != nullptr ? 1 : 0,
+            chest_compatible ? 1 : 0
+        );
+
+        if (passed)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "REG_META RESULT=PASS"
+            );
+        }
+        else
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "REG_META RESULT=INCOMPLETE"
+            );
+        }
+    }
+
     auto run_read_only_chest_association() -> void
     {
         auto& chests = get_chest_discovery_buffer();
@@ -954,6 +1148,22 @@ namespace
         std::size_t invalid_camps{};
         std::size_t missing_guild_properties{};
         std::size_t zero_guild_keys{};
+
+        auto& registration_probe_camps =
+            get_registration_probe_camp_buffer();
+
+        registration_probe_camps.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalBaseCampModel"),
+            registration_probe_camps
+        );
+
+        RC::Unreal::UObject*
+            registration_probe_chest{};
+
+        RC::Unreal::UObject*
+            registration_probe_target_storage{};
 
         for (auto* chest : chests)
         {
@@ -1069,7 +1279,60 @@ namespace
             ++associated_chests;
             ++guild_chests[guild_key];
             associated_camps.insert(camp);
+
+            if (
+                registration_probe_chest == nullptr
+            )
+            {
+                for (
+                    auto* candidate_camp :
+                        registration_probe_camps
+                )
+                {
+                    if (
+                        candidate_camp == nullptr ||
+                        candidate_camp == camp
+                    )
+                    {
+                        continue;
+                    }
+
+                    GuildKey candidate_guild{};
+
+                    if (
+                        !copy_guild_key(
+                            candidate_camp,
+                            candidate_guild
+                        ) ||
+                        candidate_guild != guild_key
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* candidate_storage =
+                        find_storage_module(
+                            candidate_camp
+                        );
+
+                    if (candidate_storage != nullptr)
+                    {
+                        registration_probe_chest =
+                            chest;
+
+                        registration_probe_target_storage =
+                            candidate_storage;
+
+                        break;
+                    }
+                }
+            }
         }
+
+        run_read_only_registration_metadata_probe(
+            registration_probe_chest,
+            registration_probe_target_storage
+        );
 
         const auto run =
             g_chest_association_runs.fetch_add(
@@ -1272,12 +1535,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4c.1e-role-thread");
+                STR("0.1.0-linux-stage4c.1f-role-metaprobe");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only "
-                    "game-thread dedicated-role validation and read-only discovery."
+                    "game-thread role and registration metadata validation."
                 );
 
             ModAuthors =
