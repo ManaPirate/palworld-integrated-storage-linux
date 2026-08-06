@@ -26,42 +26,32 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4c.4g — nested slot-identity layout probe
+Stage 4c.4h — ordinal nested-field identity layout
 ```
-
-Acceptance classification:
-
-```text
-Read-only diagnostic accepted with RESULT=INCOMPLETE
-```
-
-The incomplete result is expected and bounded: the probe safely mapped
-the top-level container, slot and item identity layouts, but known-name
-probing did not surface members inside `PalDynamicItemId`.
 
 Accepted commit baseline:
 
 ```text
-ea9fbca0ba90f46ad1c1fea6b10d1f9d07da568e
+ab94c5374ce9ecc04839b5b7ace45c052a8bfb9b
 ```
 
 Accepted candidate identity:
 
 ```text
 Source SHA256:
-1ce2136893630ae25077b1bc2671ab3cd8d49dc3229efdfc103710b38ae02b4a
+2b7bf6862276d0d38e7f531f0dc92ac7cdd98a77716ee20160ade33f5f30fcaa
 
 Artifact SHA256:
-2bedd3f51e3f656c9e2ef90a7a0a058120235b907197d05ef269a22970cf1e50
+4c7e4d233833e946b80f6084dee450666a5311c21347fd0607d99bd8f731b67c
 
 Build ID:
-f95a40b439d918018339ba6d4b9de7fddc3484f7
+339ebbfd295f9be5db18bed9dbad739a759df755
 ```
 
 Accepted runtime evidence:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4g-slot-layout-20260806-131852
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4h-ordinal-layout-20260806-134213
 ```
 
 ### What is currently proven
@@ -69,57 +59,42 @@ Accepted runtime evidence:
 1. Native NullPrism loading and lifecycle operation on the Linux
    dedicated server.
 2. Dedicated-server role resolution on the game thread.
-3. Populated-world discovery of camps, guilds, camp storages and item
-   chests.
-4. Deterministic chest-to-camp-to-guild association.
-5. A deterministic, read-only cross-camp registration plan.
-6. Guarded execution of exactly one registration call in an isolated,
-   armed test.
-7. Deterministic selection of the planner guild's aggregate
-   `UPalGuildItemStorage` through
-   `ItemContainer.BelongInfo.GroupId`.
-8. Read-only extraction and validation of all 54 aggregate
-   `UPalItemSlot` objects.
-9. `UPalItemSlot.ContainerId` is a 16-byte `PalContainerId`.
-10. `PalContainerId.Id` is a nested 16-byte struct at offset 0.
-11. `PalItemSlotId` is exactly:
-    - `ContainerId` at offset 0, size 16
-    - `SlotIndex` at offset 16, size 4
-12. `UPalItemSlot.ItemId` is a 40-byte `PalItemId`.
-13. `PalItemId` is exactly:
-    - `StaticId` as an 8-byte `FName` at offset 0
-    - `DynamicId` as a 32-byte `PalDynamicItemId` at offset 8
-14. All discovered nested members were in bounds.
-15. The probe used known-name reflection only, invoked no reflected
-    function, and added no `ProcessEvent` call.
+3. Populated-world discovery and deterministic chest-to-guild planning.
+4. Guarded execution of exactly one isolated registration call.
+5. Deterministic selection of the planner guild aggregate.
+6. Read-only validation of all 54 aggregate `UPalItemSlot` objects.
+7. `PalContainerId` is exactly one 16-byte `FGuid`.
+8. `FGuid` is exactly four 4-byte numeric fields with no padding.
+9. `PalItemSlotId` is a 16-byte `PalContainerId` followed by a
+   4-byte numeric slot index.
+10. `PalItemId` is an 8-byte `FName` followed by a 32-byte
+    `PalDynamicItemId`.
+11. `PalDynamicItemId` is exactly two consecutive 16-byte `FGuid`
+    structures.
+12. The complete container and item identity representations can be
+    hashed without reading unknown padding.
 
 ### What is not yet proven
 
-1. The ordinal field layout and concrete nested type of
-   `PalContainerId.Id`.
-2. The ordinal field layout of the 32-byte `PalDynamicItemId`.
-3. Which `PalDynamicItemId` fields represent stable item-instance
-   identity.
-4. A content fingerprint that includes complete item identity without
-   hashing unknown padding.
-5. That the one registration call changes aggregate guild-storage
-   membership, item identity, or item visibility.
-6. Registration idempotency.
-7. Removal behavior.
-8. Full-plan registration.
-9. Reconciliation after chest, camp or guild changes.
-10. Persistence across restart.
-11. Player-visible integrated crafting or storage behavior.
+1. That a complete identity-and-stack fingerprint is stable across
+   repeated snapshots in one idle server process.
+2. That registration changes aggregate item identity, stack counts,
+   membership, or visibility.
+3. Registration idempotency.
+4. Removal behavior.
+5. Full-plan registration and reconciliation.
+6. Persistence across restart.
+7. Player-visible integrated storage behavior.
 
 ### Next stage
 
 ```text
-Stage 4c.4h — read-only ordinal nested-field runtime probe
+Stage 4c.4i — complete semantic fingerprint repeatability
 ```
 
-The next stage remains unarmed and read-only. It may iterate reflected
-properties by ordinal, but it must not convert field names, read unknown
-whole-struct storage, invoke reflected functions, or perform registration.
+The next stage remains unarmed and read-only. It must take three
+same-process snapshots, add no `ProcessEvent` call, invoke no reflected
+function, and perform no registration.
 
 ## 2. Repository and branch strategy
 
@@ -2900,26 +2875,103 @@ Do not log names and do not read field values yet.
 
 ---
 
-## 24. Immediate next action
+## 24. Stage 4c.4h — ordinal nested-field identity layout
 
-Run Stage 4c.4h:
+### Goal
+
+Map every remaining nested identity component by ordinal without
+converting field names or reading values.
+
+### Candidate identity
 
 ```text
-read-only ordinal nested-field runtime probe
+Version:
+0.1.0-linux-stage4c.4h-ordinal-identity-layout
+
+Source SHA256:
+2b7bf6862276d0d38e7f531f0dc92ac7cdd98a77716ee20160ade33f5f30fcaa
+
+Artifact SHA256:
+4c7e4d233833e946b80f6084dee450666a5311c21347fd0607d99bd8f731b67c
+
+Build ID:
+339ebbfd295f9be5db18bed9dbad739a759df755
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4h-ordinal-layout-20260806-134213
+```
+
+```text
+ORDINAL_LAYOUT PASS:       1
+ORDINAL_LAYOUT INCOMPLETE: 0
+ORDINAL_LAYOUT EXCEPTION:  0
+Registration called:       0
+Gate disabled:             1
+Invalid thread:            0
+Crash markers:             0
+```
+
+### Proven layouts
+
+```text
+PalContainerId
+└─ FGuid, offset 0, size 16
+   ├─ numeric, offset 0,  size 4
+   ├─ numeric, offset 4,  size 4
+   ├─ numeric, offset 8,  size 4
+   └─ numeric, offset 12, size 4
+
+PalItemSlotId
+├─ PalContainerId, offset 0,  size 16
+└─ numeric index, offset 16, size 4
+
+PalItemId
+├─ FName, offset 0, size 8
+└─ PalDynamicItemId, offset 8, size 32
+   ├─ FGuid, offset 0,  size 16
+   └─ FGuid, offset 16, size 16
+```
+
+All fields were within bounds and all known structure pointers matched.
+
+### Accepted interpretation
+
+A complete same-process semantic fingerprint can safely hash:
+
+1. slot index;
+2. the exact 16-byte `PalContainerId`;
+3. the exact 40-byte `PalItemId`; and
+4. the exact 4-byte numeric `StackCount`.
+
+These exact structures contain no unknown padding. The embedded
+`FName` still means the fingerprint must not be claimed stable across
+server restarts.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 25. Immediate next action
+
+Run Stage 4c.4i:
+
+```text
+complete semantic fingerprint repeatability
 ```
 
 Required work:
 
-1. Select the planner guild's aggregate item container.
-2. Select one validated `UPalItemSlot`.
-3. Resolve the runtime definitions for `PalContainerId`,
-   `PalItemSlotId`, `PalItemId`, and `PalDynamicItemId`.
-4. Resolve the nested structure at `PalContainerId.Id`.
-5. Iterate each definition with
-   `TFieldIterator<FProperty>(..., EFieldIterationFlags::None)`.
-6. Log ordinal metadata only.
-7. Compare nested definitions to known Pal types and optionally
-   `/Script/CoreUObject.Guid`.
-8. Read no field values and hash no unknown bytes.
-9. Keep the package unarmed.
-10. Add no `ProcessEvent` call and invoke no reflected function.
+1. Traverse all 54 validated aggregate slots.
+2. Hash slot index, `PalContainerId`, `PalItemId`, and `StackCount`.
+3. Take three snapshots five seconds apart in one server process.
+4. Require identical slot counts, component counts, and fingerprints.
+5. Mark the fingerprint as not cross-restart stable.
+6. Keep the package unarmed.
+7. Add no `ProcessEvent` call.
+8. Invoke no reflected function and perform no registration.
