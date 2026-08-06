@@ -26,32 +26,42 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4c.4f — read-only UPalItemSlot metadata and aggregate fingerprint
+Stage 4c.4g — nested slot-identity layout probe
 ```
+
+Acceptance classification:
+
+```text
+Read-only diagnostic accepted with RESULT=INCOMPLETE
+```
+
+The incomplete result is expected and bounded: the probe safely mapped
+the top-level container, slot and item identity layouts, but known-name
+probing did not surface members inside `PalDynamicItemId`.
 
 Accepted commit baseline:
 
 ```text
-f5005b44a8e5d1b120e102259c5c47e38e7a0e60
+ea9fbca0ba90f46ad1c1fea6b10d1f9d07da568e
 ```
 
 Accepted candidate identity:
 
 ```text
 Source SHA256:
-73674561264974031835d9e3eb26396908d93602629038f7f4932ce723e3bb5d
+1ce2136893630ae25077b1bc2671ab3cd8d49dc3229efdfc103710b38ae02b4a
 
 Artifact SHA256:
-37f9b9840ecea03d091e1f35da5fd92b515dd0c070d8e0c4878568662aed0d87
+2bedd3f51e3f656c9e2ef90a7a0a058120235b907197d05ef269a22970cf1e50
 
 Build ID:
-9151a143ad76fbb0de356807b7f8c023040cc65e
+f95a40b439d918018339ba6d4b9de7fddc3484f7
 ```
 
 Accepted runtime evidence:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4f-slot-fingerprint-20260806-125800
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4g-slot-layout-20260806-131852
 ```
 
 ### What is currently proven
@@ -68,26 +78,30 @@ Accepted runtime evidence:
 7. Deterministic selection of the planner guild's aggregate
    `UPalGuildItemStorage` through
    `ItemContainer.BelongInfo.GroupId`.
-8. Read-only extraction of all 54 aggregate slot objects through
-   `FObjectPropertyBase::GetObjectPropertyValue`.
-9. All 54 aggregate slot objects are non-null and validate as both the
-   array's accepted class and `/Script/Pal.PalItemSlot`.
-10. `UPalItemSlot.ContainerId` is a 16-byte struct at offset 284.
-11. `UPalItemSlot.ItemId` is a 40-byte struct at offset 300.
-12. `UPalItemSlot.StackCount` is a 4-byte numeric field at offset 340.
-13. `GetSlotId`, `GetItemId`, and `GetStackCount` exist with return sizes
-    20, 40, and 4 bytes respectively.
-14. A deterministic structural fingerprint and an intra-process content
-    fingerprint can be produced without invoking a reflected function.
+8. Read-only extraction and validation of all 54 aggregate
+   `UPalItemSlot` objects.
+9. `UPalItemSlot.ContainerId` is a 16-byte `PalContainerId`.
+10. `PalContainerId.Id` is a nested 16-byte struct at offset 0.
+11. `PalItemSlotId` is exactly:
+    - `ContainerId` at offset 0, size 16
+    - `SlotIndex` at offset 16, size 4
+12. `UPalItemSlot.ItemId` is a 40-byte `PalItemId`.
+13. `PalItemId` is exactly:
+    - `StaticId` as an 8-byte `FName` at offset 0
+    - `DynamicId` as a 32-byte `PalDynamicItemId` at offset 8
+14. All discovered nested members were in bounds.
+15. The probe used known-name reflection only, invoked no reflected
+    function, and added no `ProcessEvent` call.
 
 ### What is not yet proven
 
-1. The nested field layout of the 16-byte `ContainerId`.
-2. The nested field layout of the 40-byte `ItemId`.
-3. The nested field layout of the 20-byte slot ID returned by
-   `GetSlotId`.
-4. A content fingerprint that includes actual item identity rather than
-   only container identity and stack count.
+1. The ordinal field layout and concrete nested type of
+   `PalContainerId.Id`.
+2. The ordinal field layout of the 32-byte `PalDynamicItemId`.
+3. Which `PalDynamicItemId` fields represent stable item-instance
+   identity.
+4. A content fingerprint that includes complete item identity without
+   hashing unknown padding.
 5. That the one registration call changes aggregate guild-storage
    membership, item identity, or item visibility.
 6. Registration idempotency.
@@ -100,11 +114,12 @@ Accepted runtime evidence:
 ### Next stage
 
 ```text
-Stage 4c.4g — read-only nested slot-identity layout survey
+Stage 4c.4h — ordinal nested-field API and identity-type survey
 ```
 
-The next stage must remain inspection-only, modify no source, invoke no
-reflected function, and perform no runtime mutation.
+The next stage is inspection-only. It must not patch source, build a
+candidate, start a server, invoke reflection, alter a save, or touch
+production.
 
 ## 2. Repository and branch strategy
 
@@ -2628,24 +2643,173 @@ unchanged.
 
 ---
 
-## 22. Immediate next action
+## 22. Stage 4c.4g — nested slot-identity layout
 
-Run Stage 4c.4g:
+### Goal
+
+Map the known nested structures inside `UPalItemSlot.ContainerId`,
+`UPalItemSlot.ItemId`, and `PalItemSlotId` without enumerating unknown
+field names or invoking reflected functions.
+
+### Candidate identity
 
 ```text
-read-only nested slot-identity layout survey
+Version:
+0.1.0-linux-stage4c.4g-slot-identity-layout
+
+Source SHA256:
+1ce2136893630ae25077b1bc2671ab3cd8d49dc3229efdfc103710b38ae02b4a
+
+Artifact SHA256:
+2bedd3f51e3f656c9e2ef90a7a0a058120235b907197d05ef269a22970cf1e50
+
+Build ID:
+f95a40b439d918018339ba6d4b9de7fddc3484f7
+```
+
+### Runtime acceptance
+
+Evidence:
+
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4g-slot-layout-20260806-131852
+```
+
+Results:
+
+```text
+SLOT_LAYOUT PASS:       0
+SLOT_LAYOUT INCOMPLETE: 1
+SLOT_LAYOUT EXCEPTION:  0
+Registration called:    0
+Gate disabled:          1
+Invalid thread:         0
+Crash markers:          0
+```
+
+The result is accepted as a bounded, read-only diagnostic. `INCOMPLETE`
+means only that the known candidate names did not expose a member inside
+`PalDynamicItemId`; it does not indicate a crash, unsafe call, invalid
+thread, or restoration failure.
+
+### Container identity
+
+The runtime `ContainerId` definition matched
+`/Script/Pal.PalContainerId`.
+
+```text
+PalContainerId
+    total size: 16
+
+    Id
+        kind:   struct
+        offset: 0
+        size:   16
+        bounds: valid
+```
+
+`ID` is an alias of `Id`.
+
+### Slot identity
+
+The known `/Script/Pal.PalItemSlotId` definition is:
+
+```text
+PalItemSlotId
+    total size: 20
+
+    ContainerId
+        kind:   PalContainerId
+        offset: 0
+        size:   16
+        bounds: valid
+
+    SlotIndex
+        kind:   numeric
+        offset: 16
+        size:   4
+        bounds: valid
+```
+
+`ContainerID` is an alias of `ContainerId`.
+
+### Item identity
+
+The runtime `ItemId` definition matched `/Script/Pal.PalItemId`.
+
+```text
+PalItemId
+    total size: 40
+
+    StaticId
+        kind:   FName
+        offset: 0
+        size:   8
+        bounds: valid
+
+    DynamicId
+        kind:   PalDynamicItemId
+        offset: 8
+        size:   32
+        bounds: valid
+```
+
+`StaticID` and `DynamicID` are aliases of the same respective fields.
+
+The known `/Script/Pal.PalDynamicItemId` definition exists and is 32
+bytes, but none of the tested names resolved:
+
+```text
+Guid
+Id
+Value
+InstanceId
+UniqueId
+LocalId
+Index
+Type
+```
+
+### Accepted interpretation
+
+The stable top-level slot identity layout is now understood.
+
+The remaining blocker is not the object model or outer layouts; it is
+the unnamed ordinal field structure inside:
+
+1. the 16-byte struct at `PalContainerId.Id`; and
+2. the 32-byte `PalDynamicItemId`.
+
+The safe next approach is ordinal `TFieldIterator<FProperty>` metadata:
+log only ordinal, offset, size, property kind, and nested-struct identity.
+Do not call `GetName()` or `FName::ToString`, and do not hash unknown
+whole-struct storage.
+
+The isolated environment was restored exactly and production remained
+unchanged.
+
+---
+
+## 23. Immediate next action
+
+Run Stage 4c.4h:
+
+```text
+ordinal nested-field API and identity-type survey
 ```
 
 Required work:
 
-1. Identify the exact reflected struct classes corresponding to the
-   16-byte `ContainerId`, 40-byte `ItemId`, and 20-byte slot ID.
-2. Identify likely nested member names for each struct.
-3. Confirm safe nested-struct metadata APIs in NullPrism.
-4. Inspect field-iteration APIs without using `FName::ToString`.
-5. Identify stable primitive, name, GUID, and fixed-size subfields that
-   can form an item-identity fingerprint.
-6. Keep all reflected functions uncalled.
-7. Add no `ProcessEvent` call.
-8. Do not patch, build, start a server, alter a save, or touch
-   production.
+1. Inspect the exact `TFieldIterator<FProperty>` constructor,
+   dereference, increment and termination APIs.
+2. Inspect safe `FProperty` offset, size, element-size, cast and nested
+   `FStructProperty` accessors.
+3. Identify any reflected or native `FGuid` script-struct path.
+4. Search for concrete nested types associated with
+   `PalContainerId.Id`.
+5. Search for native or reflected component types associated with
+   `PalDynamicItemId`.
+6. Determine whether an ordinal-only runtime probe can avoid every field
+   name conversion.
+7. Keep source, staged packages, runtimes, saves and production
+   untouched.

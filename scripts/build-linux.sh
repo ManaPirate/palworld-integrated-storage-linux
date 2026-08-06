@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4f adds a read-only UPalItemSlot metadata and aggregate fingerprint probe.
-The normal staged package remains unarmed. The probe adds no ProcessEvent call, invokes no reflected query, and does not perform registration, removal, reconciliation, routing or item transfer.
+Stage 4c.4g adds a read-only nested slot-identity layout probe.
+The normal staged package remains unarmed. The probe uses known-name reflection only, adds no ProcessEvent call, invokes no reflected function, and does not perform registration, removal, reconciliation, routing or item transfer.
 EOF
 
 echo
