@@ -114,12 +114,12 @@ Accepted runtime evidence:
 ### Next stage
 
 ```text
-Stage 4c.4h — ordinal nested-field API and identity-type survey
+Stage 4c.4h — read-only ordinal nested-field runtime probe
 ```
 
-The next stage is inspection-only. It must not patch source, build a
-candidate, start a server, invoke reflection, alter a save, or touch
-production.
+The next stage remains unarmed and read-only. It may iterate reflected
+properties by ordinal, but it must not convert field names, read unknown
+whole-struct storage, invoke reflected functions, or perform registration.
 
 ## 2. Repository and branch strategy
 
@@ -2790,26 +2790,136 @@ unchanged.
 
 ---
 
-## 23. Immediate next action
+## 23. Stage 4c.4h survey — ordinal nested-field API and identity types
+
+### Goal
+
+Confirm that the remaining unknown identity structures can be inspected
+by ordinal without converting field names or reading unknown whole
+structs.
+
+### Survey status
+
+Inspection-only survey completed on:
+
+```text
+def2cf9a754ec40d815b1a68f138089bca0c9fa3
+```
+
+No source, staged package, runtime, save, or production state was
+modified.
+
+### TFieldIterator result
+
+`TFieldIterator<FProperty>` supports the required name-free traversal:
+
+```text
+constructor:
+TFieldIterator(
+    UStruct*,
+    EFieldIterationFlags
+)
+
+validity:
+explicit operator bool()
+
+advance:
+operator++()
+
+dereference:
+operator*()
+operator->()
+```
+
+Using `EFieldIterationFlags::None` restricts traversal to direct fields
+without inherited, deprecated, or interface fields.
+
+### Safe metadata surface
+
+Each ordinal property can be inspected through:
+
+```text
+GetOffset_Internal()
+GetSize()
+GetElementSize()
+GetArrayDim()
+IsInContainer()
+CastField<...>()
+FStructProperty::GetStruct()
+UStruct::GetPropertiesSize()
+```
+
+No field name is required.
+
+### Name-conversion boundary
+
+`FField::GetName()` and `FFieldClassVariant::GetName()` internally call
+`FName::ToString`.
+
+The runtime probe must therefore avoid:
+
+```text
+GetName()
+GetFName().ToString()
+field-name enumeration
+```
+
+### Identity-type evidence
+
+The server binary exposes native struct-ops for:
+
+```text
+FGuid
+FPalContainerId
+FPalItemSlotId
+FPalItemId
+FPalDynamicItemId
+```
+
+The survey did not surface a literal reflected script path for `FGuid`.
+The runtime probe may test `/Script/CoreUObject.Guid` as an optional
+pointer-identity candidate, but acceptance must not depend on that path
+resolving.
+
+### Accepted interpretation
+
+An ordinal-only runtime probe is safe and appropriate.
+
+It should map:
+
+1. the 16-byte structure nested at `PalContainerId.Id`;
+2. the 32-byte `PalDynamicItemId`;
+3. `PalItemSlotId` as a control layout;
+4. `PalContainerId` and `PalItemId` as outer controls.
+
+For each direct field, log only ordinal, offset, size, element size,
+array dimension, property kind, nested struct size, and optional
+known-type pointer matches.
+
+Do not log names and do not read field values yet.
+
+---
+
+## 24. Immediate next action
 
 Run Stage 4c.4h:
 
 ```text
-ordinal nested-field API and identity-type survey
+read-only ordinal nested-field runtime probe
 ```
 
 Required work:
 
-1. Inspect the exact `TFieldIterator<FProperty>` constructor,
-   dereference, increment and termination APIs.
-2. Inspect safe `FProperty` offset, size, element-size, cast and nested
-   `FStructProperty` accessors.
-3. Identify any reflected or native `FGuid` script-struct path.
-4. Search for concrete nested types associated with
-   `PalContainerId.Id`.
-5. Search for native or reflected component types associated with
-   `PalDynamicItemId`.
-6. Determine whether an ordinal-only runtime probe can avoid every field
-   name conversion.
-7. Keep source, staged packages, runtimes, saves and production
-   untouched.
+1. Select the planner guild's aggregate item container.
+2. Select one validated `UPalItemSlot`.
+3. Resolve the runtime definitions for `PalContainerId`,
+   `PalItemSlotId`, `PalItemId`, and `PalDynamicItemId`.
+4. Resolve the nested structure at `PalContainerId.Id`.
+5. Iterate each definition with
+   `TFieldIterator<FProperty>(..., EFieldIterationFlags::None)`.
+6. Log ordinal metadata only.
+7. Compare nested definitions to known Pal types and optionally
+   `/Script/CoreUObject.Guid`.
+8. Read no field values and hash no unknown bytes.
+9. Keep the package unarmed.
+10. Add no `ProcessEvent` call and invoke no reflected function.
