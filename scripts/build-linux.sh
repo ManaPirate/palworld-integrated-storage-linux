@@ -245,8 +245,8 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4c.4k selects the exact reflected GetGroupIdByItemContainerId membership surface.
-The normal staged package remains unarmed. Three isolated manager-map probes each ended in identical FMallocBinned2 allocator corruption, including the final type-only probe with no map layout or map data access. Direct FMapProperty key/value inspection is therefore blocked. BelongInfo cannot identify an exact container. The existing read-only metadata proves GetGroupIdByItemContainerId has one object input, one 16-byte PalContainerId input and one 16-byte group return. This build removes every added manager-map probe and selects that reflected query as the sole exact membership-observation surface for a later separately approved call. It does not invoke the query, register anything, reconcile, route, transfer items, mutate saves, or deploy to production.
+Stage 4d.1 performs read-only lifecycle metadata discovery on the game-returned backing UObject of GetItemChestContainerAccess.
+Stage 4d.0 established that the twelve binary-derived lifecycle names are absent from the selected chest, target storage, item-container module, resolved PalItemContainer and PalItemContainerManager (60 exact lookups, zero hits). Stage 4d.1 retains the accepted read-only chest/module/ContainerId/GetContainer/membership resolution and additionally invokes the already accepted GetItemChestContainerAccess getter exactly once. Its exact coherent nonnull interface backing UObject is classified against the binary-proven PalMapObjectItemChestModel, PalMapObjectItemStorageModel, PalMapObjectGuildChestModel and PalMapObjectGlobalPalStorageModel classes. The same twelve lifecycle candidates are then searched by exact STR name on that one game-returned backing object only. Found functions are metadata-classified parameter by parameter. Candidate lifecycle functions remain uncalled. No target-storage mutation, bulk PalItemContainer enumeration, manager-map access, broad graph traversal or production deployment is included.
 EOF
 
 echo

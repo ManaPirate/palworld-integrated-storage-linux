@@ -26,101 +26,273 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4c.4j — controlled semantic before/after registration observation
+Stage 4d.1 — access-owner lifecycle metadata discovery
 ```
 
-Accepted commit baseline:
+Accepted pre-checkpoint repository baseline:
 
 ```text
-586d6d76840aba614982560f5ede74b9774de5c6
+Branch:
+linux/nullprism-dedicated-server
+
+HEAD / origin:
+260b18bc8a91bc41185e92f22ffbf31df56ce8e2
 ```
 
-Accepted candidate identity:
+Accepted Stage 4d.1 candidate identity:
 
 ```text
+Version:
+0.1.0-linux-stage4d.1-access-owner-lifecycle-metadata
+
 Source SHA256:
-45ba3f973c9a55056ac4ba4c259eedda08b38ce54354e8ebcf257fc1a023bb89
+9718e87ed41cc6e4796a42f04c9e8bc860cb0ff04ea64c6a4a05ee2c9123e88c
+
+Build script SHA256:
+65c03f728367e8c90be9f7e003eeabbf3972217de50c2b593752be6c84f57aba
 
 Artifact SHA256:
-063b010391e7af1d2a62aa0931646eafbdff8cdb809fbc14e501e9530d191982
+2ad96fc6902eb2a7d5af9b1d1de00c0b309d78fed202a4c975e2927ec020c48e
 
 Build ID:
-b9ac1d68efbb3d70fffbeffbcf2621f6e8269347
+3c02857ee2acf535a8474117ba175fdeec0b2572
 ```
 
-Accepted runtime evidence:
+Accepted Stage 4d.1 runtime evidence archive SHA256:
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619
+5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
 ```
 
-Accepted same-process observation:
+Current isolated populated-world baseline remains:
 
 ```text
-Observation result:       UNCHANGED
-Semantic snapshots:       5
-Slots:                    54
-Non-null slots:           54
-Fully read slots:         54
-Container bytes:          864
-Item bytes:               2160
-Stack bytes:              216
-Exceptions:               0
-Baseline fingerprint:     ca861a76f7cbc1b4
-Immediate fingerprint:    ca861a76f7cbc1b4
-Delayed fingerprint:      ca861a76f7cbc1b4
-Delayed matches baseline: 3 / 3
-Retained change:          no
-Cross-process comparison: not performed
+Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Player saves:
+19
+
+Normal isolated mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
 ```
+
+Current production continuity reference during the accepted late-4c / 4d runs:
+
+```text
+PalServer PID:
+82
+
+Container StartedAt:
+2026-08-06T18:30:02.767711895Z
+```
+
+### Mature planner invariant
+
+The populated isolated world converges to:
+
+```text
+guilds=8
+active_guilds=7
+chests=157
+storages=20
+pairs=285
+own_camp=157
+
+duplicate_chests=0
+duplicate_storages=0
+duplicate_pairs=0
+chest_camp_conflicts=0
+storage_camp_conflicts=0
+chest_guild_conflicts=0
+storage_guild_conflicts=0
+null_camps=0
+invalid_camps=0
+missing_guild=0
+zero_guild=0
+without_storage=0
+```
+
+The planner fingerprint is a runtime-family stability check. It is not treated
+as a cross-restart semantic identity.
+
+The controlled membership experiments use guild:
+
+```text
+20f979c33446e7f1f8cea19499aad71a
+```
+
+The selected physical chest's `PalContainerId` must be reacquired dynamically
+on every PalServer run. It must not be frozen across restarts.
 
 ### What is currently proven
 
-1. Native NullPrism loading and lifecycle operation on the Linux
+1. Native NullPrism loading and lifecycle operation work on the Linux
    dedicated server.
-2. Dedicated-server role resolution on the game thread.
-3. Populated-world discovery and deterministic chest-to-guild planning.
-4. Guarded execution of exactly one isolated registration call.
-5. Deterministic selection of the planner guild aggregate.
-6. Read-only validation of all 54 aggregate `UPalItemSlot` objects.
-7. `PalContainerId`, `PalItemSlotId`, `PalItemId`, and
-   `PalDynamicItemId` have complete validated layouts for semantic
-   fingerprinting.
-8. A complete identity-and-stack fingerprint is repeatable within one idle
-   PalServer process.
-9. One explicitly armed registration call completed with the exact validated
-   foreign-chest and target-storage tuple.
-10. The selected guild aggregate retained the same 54 slot identities and
-    stack counts immediately after that call and at 5, 10, and 15 seconds.
-11. The isolated server remained stable for 180 seconds after the observation.
-12. The isolated mod and populated-world save were restored exactly.
-13. Production PID and container `StartedAt` remained unchanged.
+2. Dedicated-server role resolution occurs on the Unreal game thread.
+3. Populated-world camp, guild, storage, chest, and same-guild foreign-camp
+   planning are deterministic.
+4. The complete planner contains 157 associated chests, 20 storages, and 285
+   deduplicated foreign-camp registration pairs across seven active guilds.
+5. A physical chest exposes an exact
+   `UPalMapObjectItemContainerModule*` through `GetItemContainerModule`.
+6. That module exposes the chest's exact nonzero 16-byte `PalContainerId`
+   through `GetContainerId`.
+7. `PalItemContainerManager.GetContainer(PalContainerId)` and
+   `TryGetContainer(PalContainerId)` resolve the selected physical chest to an
+   already-existing nonnull `PalItemContainer`.
+8. `GetGroupIdByItemContainerId(object, PalContainerId)` is an independent
+   guild-membership surface.
+9. The exact membership query returns the zero Guid for the selected known
+   unregistered physical chest and the selected guild Guid for a known
+   registered selected-guild storage container.
+10. The zero Guid is therefore an absence sentinel only. It must not be used as
+    a semantic guild ID.
+11. Container existence and guild membership are separate manager layers.
+    The missing operation is guild association, not container creation.
+12. `GetItemContainerAccess` and `GetItemChestContainerAccess` both return an
+    exact 16-byte `PalMapObjectItemContainerAccessInterface`.
+13. The two access getters return the same coherent nonnull backing
+    UObject/interface pair. The backing UObject is not the physical chest.
+14. The exact ready-callback argument can be assembled by copying the
+    game-returned 16-byte interface value verbatim.
+15. `OnAvailableConcreteModel_ServerInternal(chest)` does not create guild
+    membership by itself.
+16. `OnReadyItemContainerGuildChest(interface)` does not create guild
+    membership by itself.
+17. `OnUpdateItemContainerModule(module*)` does not create guild membership by
+    itself.
+18. `OnUpdateItemContainer(PalItemContainer*)` does not create guild membership
+    by itself.
+19. Stage 4d.0 found none of twelve binary-derived lifecycle names on the
+    physical chest, target storage, item-container module, resolved
+    `PalItemContainer`, or `PalItemContainerManager`.
+20. Stage 4d.1 found none of those twelve names on the coherent backing UObject
+    returned by `GetItemChestContainerAccess`.
+21. That backing UObject matched none of the exact predicted
+    `PalMapObjectItemChestModel`, `PalMapObjectItemStorageModel`,
+    `PalMapObjectGuildChestModel`, or `PalMapObjectGlobalPalStorageModel`
+    classes and is currently classified as `OTHER_EXACT_CLASS`.
+22. Accepted isolated runtime experiments complete the 180-second stability
+    window, restore the isolated mod/save exactly, and leave production
+    unchanged.
+
+### Exact reflected layouts now accepted
+
+```text
+GetItemContainerModule
+ParmsSize=8
+return: offset 0, size 8
+exact type: PalMapObjectItemContainerModule*
+```
+
+```text
+PalMapObjectItemContainerModule.GetContainerId
+ParmsSize=16
+return: offset 0, size 16
+exact type: PalContainerId
+```
+
+```text
+PalItemContainerManager.GetContainer
+input PalContainerId: offset 0, size 16
+return PalItemContainer*: offset 16, size 8
+```
+
+```text
+PalItemContainerManager.TryGetContainer
+input PalContainerId: offset 0, size 16
+out PalItemContainer*: offset 16
+return bool: offset 24
+```
+
+```text
+PalItemContainerManager.GetGroupIdByItemContainerId
+ParmsSize=40
+object input: offset 0, size 8
+PalContainerId input: offset 8, size 16
+Guid return: offset 24, size 16
+```
+
+```text
+OnReadyItemContainerGuildChest
+ParmsSize=16
+input: exact PalMapObjectItemContainerAccessInterface
+```
+
+```text
+OnUpdateItemContainerModule
+ParmsSize=8
+input: exact PalMapObjectItemContainerModule*
+```
+
+```text
+OnUpdateItemContainer
+ParmsSize=8
+input: exact PalItemContainer*
+```
+
+```text
+GetItemContainerAccess
+GetItemChestContainerAccess
+
+return: offset 0, size 16
+exact type: PalMapObjectItemContainerAccessInterface
+```
+
+### Permanently blocked or exhausted routes
+
+The following routes must not be casually reopened:
+
+1. **`ItemContainerMap_InServer` / manager-map runtime inspection.**
+   Three progressively reduced `FMapProperty` probes produced the same
+   allocator-corruption failure followed by signal 11. Do not rerun direct
+   manager-map inspection.
+2. **Broad reflected graph / `TFieldRange` traversal.**
+   This produced allocator corruption. Do not rerun broad graph traversal.
+3. **Bulk `FindAllOf("PalItemContainer")` processing.**
+   The query returned 9,874 objects, then allocator corruption occurred during
+   the subsequent bulk processing path before the first per-container record.
+   The bulk processing strategy is blocked. This does not prove the initial
+   `FindAllOf` call alone is unsafe.
+4. **Fixed selected-chest property guesses.**
+   Sixteen exact property names were exhausted with negative results.
+5. **Fixed selected-chest accessor guesses.**
+   Thirty exact accessor names were exhausted with negative results.
+6. **Standalone `OnAvailableConcreteModel_ServerInternal(chest)`.**
+   Controlled negative; do not repeat blindly.
+7. **Standalone `OnReadyItemContainerGuildChest(interface)`.**
+   Controlled `NO_TRANSITION`; do not repeat standalone.
+8. **Standalone `OnUpdateItemContainerModule(module*)`.**
+   Controlled `NO_TRANSITION`; do not repeat standalone.
+9. **Standalone `OnUpdateItemContainer(PalItemContainer*)`.**
+   Controlled `NO_TRANSITION`; do not repeat standalone.
+10. The historical no-call `QUERY_ASSEMBLY` incompleteness predates the
+    accepted module-to-`PalContainerId` bridge and is not a current blocker.
 
 ### What is not yet proven
 
-1. Which state, if any, the registration call changes.
-2. Container-manager membership or container-to-group ownership changes.
-3. `BelongInfo`, routing, or visibility changes.
-4. Registration idempotency.
-5. Removal behavior.
-6. Full-plan registration and reconciliation.
-7. Persistence across restart.
-8. Player-visible integrated storage behavior.
+1. The exact operation that creates `PalContainerId -> GuildId` membership.
+2. The exact runtime class identity of the
+   `GetItemChestContainerAccess` backing UObject.
+3. Whether association requires a multi-step setup/registration/lifecycle
+   sequence.
+4. Removal/unregistration behaviour.
+5. Full 285-pair registration and reconciliation.
+6. Persistence or reconstruction behaviour across restart.
+7. Server-authoritative integrated material routing/consumption.
+8. Player-visible integrated-storage behaviour on Linux.
 
 ### Next stage
 
 ```text
-Stage 4c.4k — exact container-membership observability selection
+Stage 4d.2 — exact access-owner runtime class identification
 ```
 
-The next stage is read-only. It must select and statically validate one exact
-container-membership surface capable of observing the already-validated
-foreign chest before and after registration.
-
-Candidate surfaces are limited to the previously surveyed
-`ItemContainerMap_InServer`, `BelongInfo`, and exact container-to-group query
-metadata. No reflected function may be called and no registration may be
-performed during the selection stage.
+Stage 4d.2 should remain read-only. It should identify the exact runtime class
+and name of the coherent backing UObject returned by
+`GetItemChestContainerAccess` without broad graph traversal, manager-map
+access, bulk `PalItemContainer` processing, or lifecycle candidate invocation.
 
 ## 2. Repository and branch strategy
 
@@ -1857,16 +2029,11 @@ The first usable release requires:
 
 ## 14. Latest evidence paths
 
-### Accepted Stage 4c.4j runtime evidence
+### Accepted Stage 4c.4j semantic observation
 
 ```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619
-```
-
-Semantic observation log:
-
-```text
-/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4j-semantic-observation-20260806-161619/semantic-observation-lines.log
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/
+integrated-storage-stage4c4j-semantic-observation-20260806-161619
 ```
 
 Accepted result:
@@ -1875,7 +2042,35 @@ Accepted result:
 SEMANTIC_OBSERVATION RESULT=UNCHANGED
 ```
 
-Restored isolated state:
+### Later accepted evidence identities
+
+The late-Stage-4c experiments are identified by evidence archive SHA256:
+
+```text
+Stage 4c.4u:
+c110b6ceca9446283abd405914ede80a553234dcf274f34c484111067bae2dc6
+
+Stage 4c.4v:
+346b83766b58b54c5f7ae04c08e46f4ed76492f344867b6aba2ebb376faf82e3
+
+Stage 4c.4w:
+d78db90fa9cf0a90cd86a742b6faa90d1e963ce758de59777832745d139236b9
+
+Stage 4c.4x:
+1d048eb2eac6509551c054881eebc1756e77fbf209b7db0b872436dce9acdad7
+```
+
+Read-only Stage 4d discovery evidence archives:
+
+```text
+Stage 4d.0:
+6f274fb62cf9be7626c6d17843619205308b3a9532ad3113a89a701042f4311a
+
+Stage 4d.1:
+5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
+```
+
+The normal isolated state remains:
 
 ```text
 Mod SHA256:
@@ -1888,18 +2083,18 @@ Player saves:
 19
 ```
 
-Production invariant:
+The current production continuity reference for the late accepted runs is:
 
 ```text
 PID:
-171
+82
 
 StartedAt:
-2026-08-06T08:33:34.425634823Z
+2026-08-06T18:30:02.767711895Z
 ```
 
 Earlier accepted evidence paths remain recorded in their chronological stage
-sections below.
+sections.
 
 ## 15. Stage 4c.4a — class-specific observability survey
 
@@ -3285,48 +3480,22 @@ claim is made.
 Registration idempotency remains blocked.
 
 ---
-## 27. Immediate next action
+## 27. Stage 4c.4k — exact container-membership observability selection
 
-Run Stage 4c.4k:
+### Goal
+
+Select one exact, semantic, read-only surface capable of reporting the group
+associated with a validated `PalContainerId`.
+
+### Accepted surface
+
+Stage 4c.4k selected:
 
 ```text
-exact container-membership observability selection
+UPalItemContainerManager.GetGroupIdByItemContainerId
 ```
 
-Required work:
-
-1. Start from commit `586d6d76840aba614982560f5ede74b9774de5c6` with the accepted Stage 4c.4j source
-   modifications present and the normal staged package unarmed.
-2. Identify the exact foreign chest container identity already selected by
-   the planner.
-3. Compare the previously surveyed `ItemContainerMap_InServer`,
-   `BelongInfo`, and exact container-to-group query metadata as read-only
-   observation candidates.
-4. Select one surface that can represent membership for that exact container
-   without pointer-only or cross-process assumptions.
-5. Record the exact property, key, value, offsets, sizes, and access method
-   required for a future before/after probe.
-6. Add no `ProcessEvent` call and invoke no reflected function.
-7. Perform no registration, second call, full-plan execution, reconciliation,
-   routing, item transfer, save mutation, or production deployment.
-8. Leave the repository, staged package, isolated save, and production
-   environment unchanged.
-
-Only after one exact membership surface is selected and statically accepted
-may a new armed before/after observation be built.
-
-
-<!-- STAGE4C4K_ACCEPTED_BEGIN -->
-## Stage 4c.4k — exact container-membership observability selection
-
-**Status:** Accepted.
-
-Stage 4c.4k selected the exact read-only surface that can be used to
-determine the group associated with a validated `PalContainerId`:
-
-`UPalItemContainerManager.GetGroupIdByItemContainerId`
-
-The selected reflected function metadata is:
+Accepted reflected layout:
 
 | Field | Accepted value |
 |---|---:|
@@ -3341,86 +3510,817 @@ The selected reflected function metadata is:
 | Return | offset 24, size 16 |
 
 The second input is the exact 16-byte `PalContainerId`. The return is a
-16-byte group identifier. Stage 4c.4k selected this surface but did **not**
-invoke it.
+16-byte group identifier.
 
-### Rejected candidates
+Stage 4c.4k selected this surface but did **not** invoke it.
 
-Direct inspection of
-`UPalItemContainerManager.ItemContainerMap_InServer` is blocked.
+### Rejected observation routes
 
-Three progressively narrower isolated probes all ended with the same
+`UPalItemContainerManager.ItemContainerMap_InServer` is permanently blocked as
+a direct runtime observation path.
+
+Three progressively narrower isolated manager-map probes all produced the same
 `FMallocBinned2` allocator-corruption failure followed by signal 11:
 
-1. full map iteration over the live map;
-2. reflected map metadata plus layout only, with no entry iteration;
-3. key/value property types only, with no layout or map-data access.
+1. full live-map iteration;
+2. reflected map metadata/layout only;
+3. key/value property-type access only.
 
 No direct manager-map probe remains in the accepted source or artifact.
 
-`UPalItemContainer.BelongInfo` remains insufficient for exact membership
-observation. It exposes a group identifier but no tested exact container
-identifier.
+`UPalItemContainer.BelongInfo` was also rejected as the primary exact
+membership oracle because it exposed a group identifier without a tested exact
+container identifier.
 
-### Accepted runtime evidence
+Accepted Stage 4c.4k candidate identity:
 
-Candidate identity:
+```text
+Source SHA256:
+00bc9061532b67efaf260011e53464d2e757c119fdb16dd7e6f3d5985e14610d
 
-- Source SHA-256:
-  `00bc9061532b67efaf260011e53464d2e757c119fdb16dd7e6f3d5985e14610d`
-- Artifact SHA-256:
-  `0a74a9ea8ffb3e5bac6d48b75f0cc6fce17459d9429074ea02c10a818e312654`
-- Build ID:
-  `93e1a5b418478bbba66edd53e08bbf89177d29bb`
+Artifact SHA256:
+0a74a9ea8ffb3e5bac6d48b75f0cc6fce17459d9429074ea02c10a818e312654
 
-Runtime evidence directory:
+Build ID:
+93e1a5b418478bbba66edd53e08bbf89177d29bb
+```
 
-`/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/integrated-storage-stage4c4k-query-selection-20260806-172555`
+Accepted runtime evidence directory:
 
-Forensic report:
+```text
+/mnt/disk1/Development/palworld-linux-mods/runtime-test/evidence/
+integrated-storage-stage4c4k-query-selection-20260806-172555
+```
 
-`/mnt/disk1/Servers/Palworld/_staging/stage4c4k-query-selection-forensics/stage4c4k-query-selection-forensics.txt`
+The server remained stable for 180 seconds, the normal staged package remained
+unarmed, the isolated mod/save/player state was restored, and production
+remained unchanged.
 
-Accepted observations:
+---
 
-- exactly one selected-query metadata line;
-- exactly one `QUERY_META RESULT=PASS`;
-- zero manager-map markers;
-- registration gate disabled;
-- zero registration calls;
-- 180 seconds of post-validation server stability;
-- zero allocator-corruption, signal-11, or segmentation-fault markers;
-- 25 complete planner, registration-metadata, and chest-association passes;
-- the initial `run=1` planner and metadata results were normal
-  pre-readiness transients, followed immediately by the complete 285-pair
-  plan;
-- the sole newly timestamped `UE4SS-crashes/crash_78.log` was empty,
-  zero bytes, and contained no crash marker;
-- isolated mod, `Level.sav`, and all 19 player saves were restored;
-- production PID `171` and
-  `StartedAt 2026-08-06T08:33:34.425634823Z` remained unchanged;
-- the normal staged package remained unarmed.
+## 28. Stage 4c.4l — physical chest to `PalContainerId` bridge
 
-### Scope boundary
+### Accepted result
 
-Stage 4c.4k proves only that
-`GetGroupIdByItemContainerId` is the selected exact observation surface and
-that its reflected layout is stable in the isolated dedicated-server
-environment.
+Stage 4c.4l established the safe semantic identity bridge:
 
-It does not prove parameter semantics beyond the reflected types and
-offsets, does not invoke the selected function, does not establish a
-before/after membership result, and does not establish registration
-idempotency or persistence.
-<!-- STAGE4C4K_ACCEPTED_END -->
+```text
+physical chest
+  -> GetItemContainerModule
+  -> PalMapObjectItemContainerModule*
+  -> GetContainerId
+  -> exact nonzero PalContainerId
+```
 
-## Current position
+Accepted candidate identity:
 
-Stage 4c.4k is accepted.
+```text
+Version:
+0.1.0-linux-stage4c.4l-module-container-id-accessor
 
-The selected exact membership-observation surface is
-`UPalItemContainerManager.GetGroupIdByItemContainerId`. Direct manager-map
-inspection is blocked, and `BelongInfo` is insufficient.
+Source SHA256:
+b43c0d658d692a31c6063316ca51e8259b0d829c717e34f4169589c51d23e838
 
-**Sole next target:** Stage 4c.4l — exact selected-query parameter semantics
-and no-call parameter assembly.
+Build script SHA256:
+1d2283f915e7283491b8110a5d0eeabd944c5c375273c705723be10f46dcc789
+
+Artifact SHA256:
+fff28a9da91709d654ea670055addbf8f4b71339576de75ae7d814cfdeff0b4d
+
+Build ID:
+5a61dad6ccbfe2b4a4f8892963396822e9a53e8d
+```
+
+The chest's `PalContainerId` is reacquired dynamically every runtime. Pointer
+identity and a previously observed container ID are not reused across
+restarts.
+
+---
+
+## 29. Stage 4c.4m — first selected membership-query observation
+
+Using the accepted module-to-`PalContainerId` bridge, the exact selected query
+was invoked for the known unregistered physical chest.
+
+Result:
+
+```text
+selected physical chest:
+PalContainerId = nonzero
+
+membership return:
+00000000000000000000000000000000
+```
+
+This was the first semantic evidence that the exact zero Guid represents the
+absence of group membership for that container.
+
+A positive registered control was still required before accepting that
+interpretation.
+
+---
+
+## 30. Stage 4c.4n — negative/positive membership control
+
+The exact query was tested against both known states:
+
+```text
+known unregistered selected physical chest
+  -> zero Guid
+```
+
+```text
+known registered selected-guild storage container
+  -> 20f979c33446e7f1f8cea19499aad71a
+```
+
+Exact layout:
+
+```text
+GetGroupIdByItemContainerId
+ParmsSize=40
+
+object input:
+offset=0
+size=8
+
+PalContainerId input:
+offset=8
+size=16
+
+Guid return:
+offset=24
+size=16
+```
+
+### Accepted semantic conclusion
+
+The exact zero Guid is an **absence sentinel only**.
+
+It must not be treated as a valid semantic guild ID.
+
+This stage established the safe before/after membership oracle used by the
+later controlled callback experiments.
+
+---
+
+## 31. Stage 4c.4o — `OnAvailableConcreteModel_ServerInternal` standalone negative
+
+The historically upstream-looking target-storage callback was tested once
+against the selected unregistered chest:
+
+```text
+target_storage->OnAvailableConcreteModel_ServerInternal(chest)
+```
+
+Precondition:
+
+```text
+membership = zero
+```
+
+Postcondition:
+
+```text
+same PalContainerId
+membership = zero
+target-storage semantic fingerprint = unchanged
+```
+
+The server remained stable.
+
+### Conclusion
+
+```text
+OnAvailableConcreteModel_ServerInternal(chest)
+is not a standalone guild-association primitive.
+```
+
+Do not repeat it blindly.
+
+---
+
+## 32. Stage 4c.4p — bounded exact-name function metadata survey
+
+A bounded metadata-only survey inspected 19 exact candidate names across five
+already-known objects.
+
+Important target-storage functions found:
+
+```text
+OnAvailableConcreteModel_ServerInternal
+  ParmsSize=8
+  object input
+
+OnReadyItemContainerGuildChest
+  ParmsSize=16
+  one input
+
+OnUpdateItemContainerModule
+  ParmsSize=8
+  object input
+
+OnUpdateItemContainer
+  ParmsSize=8
+  object input
+```
+
+Important manager functions confirmed:
+
+```text
+TryGetContainer
+GetContainer
+GetGroupIdByItemContainerId
+```
+
+No broad reflected graph traversal was required.
+
+---
+
+## 33. Stage 4c.4q — exact parameter identities
+
+Stage 4c.4q classified the important candidate parameters exactly.
+
+```text
+OnReadyItemContainerGuildChest
+ParmsSize=16
+input:
+  FInterfaceProperty
+  exact interface:
+  /Script/Pal.PalMapObjectItemContainerAccessInterface
+```
+
+```text
+OnUpdateItemContainerModule
+ParmsSize=8
+input:
+  exact PalMapObjectItemContainerModule*
+```
+
+```text
+OnUpdateItemContainer
+ParmsSize=8
+input:
+  exact PalItemContainer*
+```
+
+```text
+GetContainer
+input:
+  PalContainerId at offset 0, size 16
+return:
+  PalItemContainer* at offset 16, size 8
+```
+
+```text
+TryGetContainer
+input:
+  PalContainerId at offset 0, size 16
+out:
+  PalItemContainer* at offset 16
+return:
+  bool at offset 24
+```
+
+This removed generic `UObject*` guessing from the remaining manager and
+target-storage experiments.
+
+---
+
+## 34. Stage 4c.4r — manager resolution proves existence != membership
+
+The selected unregistered physical chest was resolved through both exact
+manager paths:
+
+```text
+GetContainer(PalContainerId)
+TryGetContainer(PalContainerId)
+```
+
+Both resolved the same existing nonnull `PalItemContainer` while:
+
+```text
+GetGroupIdByItemContainerId(...) = zero Guid
+```
+
+A registered selected-guild storage control resolved consistently to its
+existing container.
+
+### Major architectural conclusion
+
+```text
+container existence != guild membership
+```
+
+The target chest's `PalItemContainer` already exists.
+
+The unresolved Integrated Storage operation is association of that existing
+`PalContainerId` with the guild, not creation of the container itself.
+
+---
+
+## 35. Stage 4c.4s — exact access-interface getter signatures
+
+The selected chest exposes:
+
+```text
+GetItemContainerAccess
+GetItemChestContainerAccess
+```
+
+Both return an exact 16-byte `FInterfaceProperty` of:
+
+```text
+/Script/Pal.PalMapObjectItemContainerAccessInterface
+```
+
+No getter invocation was required for this stage.
+
+---
+
+## 36. Stage 4c.4t — access-interface getter runtime control
+
+Both access getters were invoked exactly once.
+
+Each returned a coherent nonnull interface pair:
+
+```text
+object_nonnull=1
+interface_nonnull=1
+coherent=1
+object_is_chest=0
+```
+
+The two getters returned the same backing UObject and the same interface
+pointer.
+
+No registration or membership transition occurred.
+
+### Conclusion
+
+The access value is a real game-produced shared access proxy/interface backed
+by a UObject that is not the physical chest.
+
+---
+
+## 37. Stage 4c.4u — exact ready-callback parameter assembly
+
+Stage 4c.4u proved the ready callback's exact 16-byte argument can be assembled
+without constructing or guessing an interface value.
+
+The probe:
+
+1. invoked `GetItemChestContainerAccess` exactly once;
+2. revalidated the exact callback metadata;
+3. copied the game-returned 16-byte interface value verbatim into the callback
+   argument buffer;
+4. did **not** invoke the callback.
+
+Accepted candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4c.4u-ready-callback-assembly
+
+Source SHA256:
+a088b12b2be80e37dbe457f5597e286a93da22c1a7f28382ca6a01f2dcc2c0ca
+
+Build script SHA256:
+a34d1036bfbf7443a42499a4b0dc4656fb055db4da88006a1e7b735481f1d24b
+
+Artifact SHA256:
+aa726a014d1401703d9467b5349d22800409492af9156648786649b8cc945b67
+
+Build ID:
+e50ee48a221f956c24a530376b060eebfba7485b
+```
+
+Evidence archive SHA256:
+
+```text
+c110b6ceca9446283abd405914ede80a553234dcf274f34c484111067bae2dc6
+```
+
+Result:
+
+```text
+getter_calls=1
+callback_calls=0
+registration_calls=0
+argument_assembly=exact
+180-second stability=PASS
+```
+
+---
+
+## 38. Stage 4c.4v — ready callback standalone negative
+
+Stage 4c.4v invoked exactly once:
+
+```text
+OnReadyItemContainerGuildChest(
+    exact game-returned PalMapObjectItemContainerAccessInterface
+)
+```
+
+Accepted candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4c.4v-ready-callback-membership-transition
+
+Source SHA256:
+a76768f667eceabd0d31c7ea0e3f436e1195054eede2f5e1d6fd2b48fa6b510a
+
+Build script SHA256:
+97e8174c84bb667e2af924090f9954e7aaaffb6363f58bed7baa666df5aaf2e5
+
+Artifact SHA256:
+3d52d24528021283f3f7f2de1be7c0e152b6a34d69dab430eacbf29181f35148
+
+Build ID:
+f6411069d1b72ec755cfa650aaf66c44ba828ebd
+```
+
+Evidence archive SHA256:
+
+```text
+346b83766b58b54c5f7ae04c08e46f4ed76492f344867b6aba2ebb376faf82e3
+```
+
+Controlled result:
+
+```text
+PRE:
+PalContainerId = nonzero
+membership = zero
+
+callback_calls=1
+
+POST:
+same PalContainerId=1
+membership = zero
+
+outcome=NO_TRANSITION
+```
+
+### Conclusion
+
+`OnReadyItemContainerGuildChest` does not establish guild membership by
+itself.
+
+---
+
+## 39. Stage 4c.4w — module-update callback standalone negative
+
+Stage 4c.4w invoked exactly once:
+
+```text
+OnUpdateItemContainerModule(
+    exact game-returned PalMapObjectItemContainerModule*
+)
+```
+
+Accepted candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4c.4w-update-module-membership-transition
+
+Source SHA256:
+cf70117e9747b0d90756d779f8b58b7a99b0fd619bb428715ede2149bb8f544f
+
+Build script SHA256:
+769e45db1f592311323f911d91c05f7ba5acb467b6927955958867279a0cd658
+
+Artifact SHA256:
+fb181a1473fca9b19de9de011ae14aa992c947b012eae147c423697e94cd5405
+
+Build ID:
+2153b864f46078a1ef67fef18161ddbc4598bd9a
+```
+
+Evidence archive SHA256:
+
+```text
+d78db90fa9cf0a90cd86a742b6faa90d1e963ce758de59777832745d139236b9
+```
+
+Controlled result:
+
+```text
+same module=1
+same PalContainerId=1
+POST membership=zero
+
+outcome=NO_TRANSITION
+```
+
+### Conclusion
+
+`OnUpdateItemContainerModule` does not establish guild membership by itself.
+
+---
+
+## 40. Stage 4c.4x — container-update callback standalone negative
+
+Stage 4c.4x resolved the selected chest's already-existing container through:
+
+```text
+PalItemContainerManager.GetContainer(PalContainerId)
+```
+
+and invoked exactly once:
+
+```text
+OnUpdateItemContainer(PalItemContainer*)
+```
+
+Accepted candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4c.4x-update-container-membership-transition
+
+Source SHA256:
+d6eab74f0ee5ca668dee9ca2ece95b2bdfd853e366cc91f0108b1e8f37f013df
+
+Build script SHA256:
+46a001732e6b238e5907001dec957f5fb18d474ea0e49166f0be2a5940513ed7
+
+Artifact SHA256:
+2edf7ba33a860f2cbcd6d2b2e348dc0e3c8c5f59cbaa5aba76ea8b9395741196
+
+Build ID:
+dc47e6475143c9992ea16ca5729c2f94abed29ca
+```
+
+Evidence archive SHA256:
+
+```text
+1d048eb2eac6509551c054881eebc1756e77fbf209b7db0b872436dce9acdad7
+```
+
+Controlled result:
+
+```text
+same_container=1
+same PalContainerId=1
+POST membership=zero
+
+outcome=NO_TRANSITION
+```
+
+The 180-second stability window passed. No nonempty crash evidence was created
+and the isolated world restored exactly.
+
+### Conclusion
+
+`OnUpdateItemContainer(PalItemContainer*)` does not establish guild membership
+by itself.
+
+---
+
+## 41. Consolidated Stage 4c conclusions
+
+Stage 4c began with a one-shot target-storage call and no semantic membership
+oracle.
+
+It ended with an exact chest/container/membership model.
+
+### Proven physical identity chain
+
+```text
+physical chest
+  -> GetItemContainerModule
+  -> PalMapObjectItemContainerModule*
+  -> GetContainerId
+  -> PalContainerId
+  -> PalItemContainerManager.GetContainer
+  -> existing PalItemContainer*
+```
+
+### Proven membership chain
+
+```text
+PalItemContainerManager.GetGroupIdByItemContainerId(
+    object,
+    PalContainerId
+)
+```
+
+Known semantics:
+
+```text
+unregistered physical chest
+  -> zero Guid
+
+registered selected-guild storage
+  -> selected guild Guid
+```
+
+Therefore:
+
+```text
+container existence and guild membership are separate manager layers.
+```
+
+The physical chest's container already exists. The unresolved operation is the
+guild association.
+
+### Standalone target-storage callback results
+
+```text
+OnAvailableConcreteModel_ServerInternal(chest)
+  -> no membership transition
+
+OnReadyItemContainerGuildChest(interface)
+  -> NO_TRANSITION
+
+OnUpdateItemContainerModule(module*)
+  -> NO_TRANSITION
+
+OnUpdateItemContainer(PalItemContainer*)
+  -> NO_TRANSITION
+```
+
+The latter three used exact reflected parameter types and game-produced
+arguments.
+
+These callbacks are no longer valid standalone-registration hypotheses.
+
+They may still be lifecycle/update notifications that expect association to
+have been created elsewhere.
+
+### Access-interface result
+
+```text
+GetItemContainerAccess
+GetItemChestContainerAccess
+```
+
+both return the same coherent non-chest backing UObject/interface pair.
+
+The ready-callback argument can be copied verbatim from the game-returned
+16-byte interface value.
+
+### Permanent safety exclusions
+
+Do not reopen without a materially different rationale:
+
+```text
+direct ItemContainerMap_InServer / FMapProperty inspection
+broad reflected graph / TFieldRange traversal
+bulk PalItemContainer result processing
+16 exhausted fixed property guesses
+30 exhausted fixed accessor guesses
+standalone ready/module/container update callbacks
+```
+
+For the bulk `PalItemContainer` route, the precise finding is:
+
+```text
+FindAllOf("PalItemContainer") returned 9,874 objects.
+Allocator corruption occurred during subsequent bulk processing before the
+first per-container record.
+```
+
+The processing strategy is blocked. The initial query alone was not isolated
+as the cause.
+
+### Stage 4c final engineering question
+
+The remaining problem is not:
+
+```text
+Which target-storage callback should be called?
+```
+
+It is:
+
+```text
+What operation creates PalContainerId -> GuildId membership?
+```
+
+---
+
+## 42. Stage 4d.0 — bounded registration-lifecycle metadata discovery
+
+Stage 4d.0 stopped guessing mutation callbacks.
+
+It resolved the selected unregistered chest through the accepted read-only
+module/`PalContainerId`/manager path, then searched twelve binary-derived
+lifecycle names across:
+
+```text
+physical chest
+target storage
+item-container module
+PalItemContainer
+PalItemContainerManager
+```
+
+Result:
+
+```text
+targets=5
+names=12
+lookups=60
+found=0
+parameter_lines=0
+candidate_calls=0
+```
+
+Evidence archive SHA256:
+
+```text
+6f274fb62cf9be7626c6d17843619205308b3a9532ad3113a89a701042f4311a
+```
+
+The 180-second stability window passed and the isolated state restored exactly.
+
+---
+
+## 43. Stage 4d.1 — access-owner lifecycle metadata discovery
+
+Stage 4d.1 targeted the coherent backing UObject returned by
+`GetItemChestContainerAccess`.
+
+Accepted candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4d.1-access-owner-lifecycle-metadata
+
+Source SHA256:
+9718e87ed41cc6e4796a42f04c9e8bc860cb0ff04ea64c6a4a05ee2c9123e88c
+
+Build script SHA256:
+65c03f728367e8c90be9f7e003eeabbf3972217de50c2b593752be6c84f57aba
+
+Artifact SHA256:
+2ad96fc6902eb2a7d5af9b1d1de00c0b309d78fed202a4c975e2927ec020c48e
+
+Build ID:
+3c02857ee2acf535a8474117ba175fdeec0b2572
+```
+
+Runtime result:
+
+```text
+GetItemChestContainerAccess calls=1
+
+object_nonnull=1
+interface_nonnull=1
+coherent=1
+object_is_chest=0
+
+PalMapObjectItemChestModel=0
+PalMapObjectItemStorageModel=0
+PalMapObjectGuildChestModel=0
+PalMapObjectGlobalPalStorageModel=0
+
+classification=OTHER_EXACT_CLASS
+
+lifecycle targets=1
+lifecycle names=12
+exact lookups=12
+found=0
+candidate_calls=0
+```
+
+Evidence archive SHA256:
+
+```text
+5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
+```
+
+No new crash files were created. The isolated mod/save/player state restored
+exactly and production remained unchanged.
+
+---
+
+## 44. Immediate next action
+
+Run Stage 4d.2:
+
+```text
+exact access-owner runtime class identification
+```
+
+Required work:
+
+1. Start from the formally accepted Stage 4d.1 state.
+2. Invoke only the already accepted `GetItemChestContainerAccess` getter.
+3. Identify the exact runtime class/name of its coherent backing UObject using
+   a narrow read-only API.
+4. Do not broad-traverse reflected fields or object graphs.
+5. Do not access manager maps.
+6. Do not bulk-process `PalItemContainer` objects.
+7. Invoke no lifecycle candidate function.
+8. Perform no target-storage mutation.
+9. Preserve the mature planner invariant.
+10. Restore the isolated environment exactly and verify production continuity.
+
+Only after the backing object's exact runtime identity is known should another
+registration-owner hypothesis be selected.
