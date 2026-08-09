@@ -104,51 +104,85 @@ on the FName-stringification problem below.
 
 ## 5. FName stringification — current status (Stage 4D.9, this session)
 
-**Bottom line, confirmed by direct runtime evidence this session:**
-`FName::ToString()` is unsafe to call anywhere in this mod, in this exact
-NullPrism-Linux + Palworld build, regardless of how the FName is obtained.
-This *reconfirms* the original Stage 4d.8b finding (below), which an
-earlier truncated log read in this session had briefly and incorrectly
-cast doubt on.
+**Bottom line, revised and narrowed by Stage 4D.9d:** `FName::ToString()`
+itself is safe to call from this mod's DSO, on this exact NullPrism-Linux +
+Palworld build, regardless of how the FName is obtained. The corruption
+does **not** come from the call. It comes from letting the returned
+FString-like object's destructor run inside `main.so`. If that destructor
+is never invoked (the result is deliberately leaked instead), the server
+keeps running normally with zero crashes. This reopens direct
+`ToString()`-based name serialization as a viable production path,
+provided results are never destructed the normal way — see the leak/cache
+design note below.
 
-Exact behavior observed, twice, independently:
+Exact behavior observed:
 
 - `Stage 4D.9a` — FName from `UClass::GetFName()` (e.g. `PalBaseCampModel`):
-  `ToString()` returns a **fully correct** decoded string, then the process
-  dies shortly after with `FMallocBinned2 Attempt to realloc an
-  unrecognized block ... canary == 0x0 != 0xb7`.
+  `ToString()` returns a **fully correct** decoded string, its destructor
+  runs normally, and the process dies shortly after with `FMallocBinned2
+  Attempt to realloc an unrecognized block ... canary == 0x0 != 0xb7`.
 - `Stage 4D.9b` — FName memcpy'd out of a live `PalItemId.StaticId`
   reflection property (the same bytes the bounded transport pool already
   reads safely, e.g. decodes to `YakushimaBlade003_3`): same result —
-  correct decode, then the identical crash shortly after.
-- Control: with **no** FName probe armed, the same server ran 288+ ticks
-  (full discovery/registration/pool-walk cycles) with zero crashes. The
-  850-slot pool walk itself is proven safe on its own.
+  correct decode, destructor runs normally, identical crash shortly after.
+- `Stage 4D.9c` — same pool-sourced FName as 4D.9b, `ToString()` called with
+  no `RC::to_string()` conversion (only `.size()` read from the result,
+  `length=23`), destructor still runs normally: **still crashed**, same
+  signature, same place. This ruled out the mod-side `RC::to_string()`
+  conversion helper as the cause — the corruption is inside whatever runs
+  when `ToString()`'s result is torn down, not in the mod's own conversion
+  code.
+- `Stage 4D.9d` — same pool-sourced FName again, but the returned value was
+  placement-constructed into a static raw byte buffer and its destructor
+  was **deliberately never called** (a controlled, single-shot,
+  diagnostic-only leak of one small string buffer). Result: `OBTAINED
+  comparison_index=6642944 number=0` → `TOSTRING_RETURNED` → `LENGTH
+  length=17` → `RESULT=PASS`, and the server then continued running
+  normally for 283+ further ticks with **zero crashes**. This is the
+  decisive result: suppressing the destructor alone — nothing else changed
+  versus 4D.9c — eliminated the crash entirely.
+- Control (established earlier in this session): with **no** FName probe
+  armed, the same server ran 288+ ticks with zero crashes. The 850-slot
+  pool walk itself is proven safe on its own.
 
-So the crash is not caused by *which* FName you call `ToString()` on, and
-it is not caused by the bounded pool walk. It is caused by calling
-`ToString()` at all — the call itself returns valid data, then something
-it does internally (most likely: an allocation that crosses the
-cross-DSO/allocator boundary between the mod's `main.so` and the engine's
-`FMallocBinned2`) corrupts the heap, and the *next* unrelated allocation
-after that is where the corruption is detected and the process dies.
+**Conclusion:** the crash is not caused by *which* FName you call
+`ToString()` on, not caused by the bounded pool walk, and — as of 4D.9d —
+not caused by the `ToString()` call itself. It is caused specifically by
+running the returned FString-like object's destructor inside `main.so`.
+The leading theory is a cross-allocator/cross-DSO mismatch: the engine
+(inside `PalServer-Linux-Shipping`) allocates the result's internal buffer
+through its own `FMallocBinned2` instance, and the mod's compiled
+destructor (in `main.so`) doesn't route the free back through that exact
+same allocator instance, corrupting allocator bookkeeping. The corruption
+doesn't crash immediately — it's detected on a later, unrelated
+allocation/reallocation, which is why every prior stage crashed shortly
+*after* a correct decode rather than during the call itself.
 
-`Stage 4D.9c` closed the remaining open variable: does the corruption come
-from the engine's own `FName::ToString()` → `FString` allocation, or from
-`RC::to_string()`'s char16_t→`std::string` conversion helper on the mod
-side? It called `ToString()` on the same pool-sourced FName as 4D.9b but
-never called `RC::to_string()` (or touched anything about the result
-beyond reading its `.size()`, `length=23`). It **still crashed**, same
-signature, same place. That rules out the mod-side conversion helper
-entirely: **the corruption is inside the engine's own `FName::ToString()`
-call itself**, triggered purely by invoking it from this mod's DSO,
-independent of anything done with the result afterward.
+**Practical implication:** `FName::ToString()` can potentially be used in
+production for the `ISREQ`/`IS1` wire transport's item-name serialization,
+as long as the mod never lets a `ToString()` result destruct normally.
+The planned design is leak-and-cache: call `ToString()` once per unique
+FName (keyed by raw `comparison_index`/`number` bytes, the same key already
+used for the transport pool), copy the needed character data out into a
+plain `std::string` (safely destructible — it uses the mod's own libstdc++
+allocator, not `FMemory`), and leak the original `ToString()` result
+deliberately (never destruct it). Item names are a small bounded set (272
+unique items observed in the test guild's pool), so the leaked footprint
+is negligible and bounded for the life of the server process.
 
-**`FName::ToString()` is therefore a confirmed dead end on this runtime —
-not fixable by changing how the mod consumes its output.** The only
-remaining path to safe name serialization is the offline patternsleuth
-`FNamePool`/`FNameEntry` decoder work (Stage 4d.8h, §8), which reads name
-data directly and never calls `ToString()` at all.
+**Not yet proven:** Stage 4D.9d only proved `.size()` is safely readable
+from a leaked-but-undestructed result. It has not yet been proven that
+reading the *character data* itself (`.data()`, iteration, or an
+`RC::to_string()`-style conversion) out of a leaked result is also safe —
+that conversion routine could perform its own allocation that crosses the
+DSO boundary in a different way. A follow-up diagnostic (character-data
+read from a leaked result, not yet run) is needed before committing to the
+leak-and-cache production design.
+
+The offline patternsleuth `FNamePool`/`FNameEntry` decoder path (Stage
+4d.8h, §8) remains a fallback if the character-data read turns out to be
+unsafe, but is no longer believed to be the only route to safe name
+serialization.
 
 This matches and refines the original (pre-session) Stage 4d.8b finding:
 
@@ -180,7 +214,7 @@ numeric suffix, not just the base name.
 1. Direct `ItemContainerMap_InServer` manager-map inspection — allocator corruption.
 2. Broad reflected graph / `TFieldRange` traversal — allocator corruption.
 3. Bulk `FindAllOf("PalItemContainer")` — allocator corruption.
-4. `FName::ToString()` / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode.
+4. `FName::ToString()` **destructed normally** / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode, triggered by the result's destructor. `ToString()` with the result deliberately leaked (never destructed) is proven safe (Stage 4D.9d, §5) and is no longer blocked.
 5. Selected-chest property guesses, fixed accessor guesses — exhausted negative.
 6. Standalone registration does not prove membership transition.
 7. `OnReadyItemContainerGuildChest`, `OnUpdateItemContainerModule`, `OnUpdateItemContainer` transition paths — all negative.
@@ -228,18 +262,28 @@ runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/s
 
 ## 8. Immediate next action
 
-Stage 4D.9c confirmed `FName::ToString()` corruption is engine-side, not
-`RC::to_string()`-side (§5). `ToString()` and everything downstream of it
-is a dead end on this runtime.
+Stage 4D.9d proved the `FMallocBinned2` corruption comes from destructing
+`ToString()`'s result inside `main.so`, not from calling `ToString()`
+itself (§5). This reopens `ToString()` as a viable production path if
+results are deliberately leaked instead of destructed normally.
 
-1. Pursue the offline patternsleuth `FNamePool` + `FNameEntry` decoder path
-   (Stage 4d.8h scope below) as the only remaining route to safe name
-   serialization — it never calls `ToString()`.
-2. Independently of FName serialization: still need a periodic/topology-aware
+1. Run a follow-up diagnostic (not yet built): read the *character data*
+   (not just `.size()`) out of a leaked, undestructed `ToString()` result —
+   e.g. via `.data()`/iteration and/or the existing `RC::to_string()`
+   conversion — while still never destructing the original result. Confirm
+   this doesn't reintroduce the corruption before trusting it in production.
+2. If that's clean, implement the production leak-and-cache helper: one
+   leaked `ToString()` call per unique FName (keyed by raw
+   `comparison_index`/`number` bytes), copied into a cached plain
+   `std::string`, for use in the `IS1|id:cnt,...` wire transport reply (§4).
+3. Keep the offline patternsleuth `FNamePool` + `FNameEntry` decoder path
+   (Stage 4d.8h scope below) as a fallback only, in case the character-data
+   read in step 1 turns out to be unsafe.
+4. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap).
 
-Stage 4d.8h scope (still valid, not yet started): offline PalServer FName
-resolver + bounded disassembly. Re-verify PalServer SHA256, copy into
+Stage 4d.8h scope (fallback, not currently the priority): offline PalServer
+FName resolver + bounded disassembly. Re-verify PalServer SHA256, copy into
 `palworld-mod-dev`, compile a tiny offline helper against the already-proven
 `ps_scan_file_ue4ss` / `PsFileResolutionResults` C ABI, link only against
 the pinned `libUE4SS.so`, call it once, and require: engine version `5.1`,
@@ -258,7 +302,8 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
-| 4D.9c | Accepted diagnostic, conclusive. `ToString()` call with no `RC::to_string()` conversion still crashes identically — corruption is engine-side, not mod-side. `FName::ToString()` confirmed dead end (§5, §8). |
+| 4D.9d | Accepted diagnostic, conclusive, supersedes 4D.9c's "dead end" framing. Same pool-sourced `ToString()` call as 4D.9c, but the result is placement-constructed into a static buffer and its destructor is deliberately never run. Server ran 283+ further ticks with zero crashes. Proves the corruption is in the result's destructor/deallocation path, not in `ToString()` itself — leak-and-cache is now a viable production path (§5, §8). |
+| 4D.9c | Accepted diagnostic. `ToString()` call with no `RC::to_string()` conversion, result destructed normally, still crashes identically — ruled out the mod-side conversion helper as the cause (§5). |
 | 4D.9b | Accepted diagnostic. `ToString()` on a memcpy'd/pool-sourced FName decodes correctly, then crashes shortly after (§5). |
 | 4D.9a | Accepted diagnostic. `ToString()` on a `GetFName()`-sourced FName decodes correctly, then crashes shortly after (§5). |
 | 4d.8g R3 | Accepted static ABI + ELF provenance. Confirmed current PalServer ELF identity and `ps_scan_file_ue4ss` C ABI. |
