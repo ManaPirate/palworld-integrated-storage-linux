@@ -33,7 +33,7 @@ Latest accepted functional observation:
 Stage 4d.7b — remote-client gate characterization
 
 Latest accepted static/parity stage:
-Stage 4d.6 — server-side upstream parity audit
+Stage 4d.8 — remote-client transport parity audit
 ```
 
 Repository parent checkpoint immediately before the Stage 4d.7a source commit:
@@ -5606,29 +5606,282 @@ repository unchanged=PASS
 
 ---
 
-## 54. Immediate next action
+---
 
-Run Stage 4d.8:
+## 54. Stage 4d.8 — remote-client transport parity audit
+
+### Classification
 
 ```text
-remote-client transport parity audit
+STATIC / READ-ONLY — ACCEPTED
 ```
 
-The next server-side work is not another container-membership probe and not a
-retry of the blocked unmodified client action.
+Evidence archive SHA256:
 
-Audit the upstream reflection-only transport path required by remote clients:
+```text
+ba53de5e9e8f05ab7b29c2c4b9f5518cf5cc7dfa06491e3764199d697e795488
+```
 
-1. identify the exact client request RPC and server receive surface;
-2. identify how the server resolves the requesting player's current camp;
-3. identify how upstream calculates `(guild pooled storage - own camp storage)`;
-4. identify the exact reply RPC/payload format sent back to the client;
-5. compare those reflection surfaces against the current Linux source;
-6. preserve the accepted 285/285 registration executor;
-7. do not port Windows AOB material-scan detours into the Linux server;
-8. keep Windows client source unchanged;
-9. define the minimum Linux-server transport implementation needed so an
-   upstream Windows client can receive far-camp material totals;
-10. after transport parity, test with the upstream client half installed;
-11. after client-gate functional acceptance, replace the one-shot executor with
-   the accepted periodic reconcile required for newly created camps.
+Accepted repository identity:
+
+```text
+HEAD / origin:
+6374210fe35bc17b50c2e87bbaecebbe4fcdd769
+
+working tree:
+clean
+
+Linux source SHA256:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+runsheet SHA256:
+15ba4621a265cd34f90fa901dc2cfa95af94fc3636dd280b4c2a2e167d54681b
+
+Windows source SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+
+build script SHA256:
+0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
+```
+
+The preserved Windows source remained byte-identical to `upstream/main`:
+
+```text
+upstream src/dllmain.cpp SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+
+live preserved src/dllmain.cpp SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+```
+
+### Exact upstream request/reply transport
+
+Upstream uses the client-owned `PalPlayerController` as the network carrier.
+
+Request:
+
+```text
+function:
+PalPlayerController.Debug_CheatCommand_ToServer(FString)
+
+sentinel:
+ISREQ|
+
+payload:
+ISREQ|<32-hex current camp GUID>
+```
+
+Reply:
+
+```text
+function:
+PalPlayerController.Debug_ReceiveCheatCommand_ToClient(FString)
+
+sentinel:
+IS1|
+
+payload:
+IS1|item:count,item:count,...
+```
+
+The server receives the request on the requesting controller and sends the reply
+back through the same controller.
+
+The current Linux source contains zero occurrences of:
+
+```text
+ISREQ|
+IS1|
+Debug_CheatCommand_ToServer
+Debug_ReceiveCheatCommand_ToClient
+srvCampById
+srvBuildForCamp
+g_instToCamp
+```
+
+Therefore the remote-client transport channel is a real remaining parity gap.
+
+### Upstream camp resolution
+
+The request includes the client's current camp GUID.
+
+Upstream resolves it by:
+
+```text
+FindAllOf(PalBaseCampModel)
+compare PalBaseCampModel.ID against client-supplied 16-byte GUID
+```
+
+Current upstream reads `PalBaseCampModel.ID` at raw offset `0x58`.
+
+For the Linux implementation, that raw offset is not accepted merely because
+upstream uses it. The next runtime probe must determine whether the exact `ID`
+property can be resolved reflectively and copied as a 16-byte `FGuid`.
+
+### Upstream server pool semantics
+
+The reply pool is:
+
+```text
+same guild
+MINUS requester's current camp
+```
+
+The client's own camp remains visible natively, so the server sends only the
+foreign same-guild material pool.
+
+Current upstream computes this from ground-truth container contents by:
+
+```text
+FindAllOf(PalItemContainer)
+    -> OwnerMapObjectInstanceId @ raw offset 0xF8
+    -> g_instToCamp
+    -> exclude requester's camp
+    -> require same guild
+    -> ItemSlotArray @ raw offset 0x70
+    -> slot Count @ raw offset 0x50
+    -> slot ItemId @ raw offset 0x68
+```
+
+This exact implementation is **not safe to port literally**.
+
+Broad:
+
+```text
+FindAllOf("PalItemContainer")
+```
+
+is already an exhausted Linux/NullPrism path after allocator corruption and must
+not be reopened without a new upstream requirement that cannot be met safely.
+
+### Accepted Linux bounded alternative
+
+The current Linux source already contains the ingredients for a bounded,
+planner-driven replacement:
+
+```text
+known planned chest UObject
+    ->
+GetItemContainerModule
+    ->
+GetContainerId
+    ->
+exact 16-byte PalContainerId
+    ->
+PalItemContainerManager.GetContainer
+    ->
+exact known PalItemContainer
+    ->
+reflected ItemSlotArray
+    ->
+bounded FScriptArrayHelper_InContainer iteration
+```
+
+Static Stage 4d.8 signal counts:
+
+```text
+Linux GetItemContainerModule=1
+Linux GetContainerId=5
+Linux GetContainer=3
+Linux ItemSlotArray=9
+Linux FScriptArrayHelper_InContainer=6
+```
+
+This means a Linux transport pool should be built from the mature known
+chest/camp planner set rather than from every `PalItemContainer` object in the
+process.
+
+### Client/server architecture boundary
+
+The Stage 4d.8 audit preserves the Stage 4d.7b interpretation.
+
+The upstream architecture has distinct halves:
+
+```text
+Linux/dedicated-server-portable half:
+- server registration
+- request RPC receive
+- request camp resolution
+- authoritative foreign-pool calculation
+- reply RPC send
+
+Windows/client half:
+- current-camp request production
+- reply parsing
+- local material display/gate injection
+- AOB material-scan detours
+```
+
+The Windows AOB detours remain outside Linux dedicated-server scope.
+
+The next Linux work is only the portable server half.
+
+### New-base-after-boot acceptance rule
+
+The Stage 4d.7b live test established:
+
+```text
+startup:
+20 storages / 285 pairs
+
+after new same-guild camp:
+21 storages / 307 pairs
+```
+
+The planner discovered the new camp after boot.
+
+The one-shot Stage 4d.7a executor intentionally did not execute the new plan.
+
+Therefore all later runtime stages that claim practical success must include a
+post-startup same-guild base creation and require:
+
+```text
+planner discovers new camp
+registration pair set expands
+new registration pairs are actually executed
+new camp participates in the functional/client test
+same PalServer PID survives
+internal UDP 8211 remains available
+zero crash/fatal markers
+```
+
+A runtime stage that works only for camps present at process startup is not
+sufficient for final acceptance.
+
+---
+
+## 55. Immediate next action
+
+Run Stage 4d.8a:
+
+```text
+read-only transport metadata characterization
+```
+
+Do not send a transport reply yet.
+
+Required runtime characterization:
+
+1. Resolve
+   `PalPlayerController.Debug_CheatCommand_ToServer`.
+2. Record exact `ParmsSize`, parameter count, parameter offset, parameter size,
+   and reflected property class for its single `FString`.
+3. Resolve
+   `PalPlayerController.Debug_ReceiveCheatCommand_ToClient`.
+4. Record the same exact metadata for its single `FString`.
+5. Resolve `PalBaseCampModel.ID` reflectively.
+6. Require an exact 16-byte GUID-compatible property layout and compare copied
+   values against the already-known camp population.
+7. For multiple mature planned ordinary chests, use only the bounded route:
+   chest -> `GetItemContainerModule` -> `GetContainerId` -> manager
+   `GetContainer`.
+8. On the exact resolved containers, characterize reflected `ItemSlotArray`.
+9. Characterize the slot object surface needed to read item ID and count without
+   raw fixed offsets if possible.
+10. Prove a bounded foreign-pool aggregate can be constructed read-only for at
+    least one guild/camp pair.
+11. Do not call `FindAllOf("PalItemContainer")`.
+12. Do not invoke either request/reply RPC.
+13. Do not add a reply `ProcessEvent`.
+14. Do not invoke any discarded Stage-4d lifecycle callback.
+15. Keep production untouched and restore the isolated test exactly.
