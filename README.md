@@ -39,13 +39,17 @@ Windows builds are outside the current scope.
 
 ## Engineering record
 
-The detailed chronological runsheet, accepted builds, runtime evidence,
-known failures, safety boundaries, and next implementation stages are
-maintained in [`docs/linux-port-status.md`](docs/linux-port-status.md).
+Linux port engineering documentation is split into three purpose-specific records:
+
+- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, and immediate next stage.
+- [`docs/linux-port-history.md`](docs/linux-port-history.md) — detailed chronological record of stages, experiments, failures, accepted results, and recovery actions.
+- [`docs/linux-port-evidence-index.md`](docs/linux-port-evidence-index.md) — compact index of major stage classifications, commits, artifact identities, and evidence archives.
 
 ## Attribution
 
-Original project by Sarfflow.
+Original Integrated Storage project by [Sarfflow](https://github.com/Sarfflow/palworld-integrated-storage).
+
+This port relies on [NullPrism's RE-UE4SS-Linux](https://github.com/NullPrism/RE-UE4SS-Linux) for the native Linux RE-UE4SS runtime used to load and run the mod on the dedicated server.
 
 Native Linux dedicated-server port by ManaPirate.
 
