@@ -21,6 +21,32 @@ A stage can be accepted as static evidence without being accepted as runtime
 proof. A compile success is not runtime acceptance. A planner observation is
 not executor proof. A client-side refusal is not a server executor failure.
 
+## Chronological-history storage authority
+
+The raw single-file chronology at the documentation split boundary is preserved
+at:
+
+```text
+commit:
+9b1ec2d79ea95935c3f6bb5f8e5e16394aa460dd
+
+path:
+docs/linux-port-history.md
+
+SHA256:
+45d7f2db1fe26192ffde7685a6f751c339c20950640c9f2bd842d6e2d38fb2eb
+
+lines:
+7455
+```
+
+The working chronological history is stored in ordered
+`docs/history/part-*.md` shards for reliable GitHub rendering.
+
+The ordered byte concatenation of those parts must equal the raw SHA above.
+`docs/linux-port-history.md` is now the navigation/integrity index for those
+parts.
+
 ## Current identities
 
 ```text

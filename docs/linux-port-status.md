@@ -42,31 +42,45 @@ static/offline transport research unless explicitly stated otherwise.
 
 ## 2. Documentation authority
 
-The engineering documentation now has three separate jobs:
+The engineering documentation has three primary entry points:
 
 - [`linux-port-status.md`](linux-port-status.md) — **current state**: accepted
-  checkpoint, current safety boundaries, unresolved work, and immediate next
-  action.
-- [`linux-port-history.md`](linux-port-history.md) — **chronological record**:
-  detailed stage-by-stage engineering history, including failed candidates,
-  runtime observations, recovery actions, and accepted conclusions.
+  checkpoint, safety boundaries, unresolved work, and immediate next action.
+- [`linux-port-history.md`](linux-port-history.md) — **chronological history
+  index** linking the complete ordered archive under [`docs/history/`](history/).
 - [`linux-port-evidence-index.md`](linux-port-evidence-index.md) — **evidence
-  index**: compact lookup table for major stages, evidence archives, commits,
-  source/artifact identities, and classifications.
+  index**: compact lookup for major stages, evidence archives, commits, and
+  source/artifact identities.
 
-At the moment of this split, `linux-port-history.md` is a byte-for-byte copy of
-the previous 7,455-line `linux-port-status.md`.
+The original 7,455-line single-file history is permanently preserved at:
+
+```text
+Git commit:
+9b1ec2d79ea95935c3f6bb5f8e5e16394aa460dd
+
+path:
+docs/linux-port-history.md
+
+SHA256:
+45d7f2db1fe26192ffde7685a6f751c339c20950640c9f2bd842d6e2d38fb2eb
+```
+
+For GitHub readability, the current chronological payload is stored as smaller
+`docs/history/part-*.md` files. Their ordered byte concatenation is required to
+reproduce that raw SHA exactly.
 
 Future accepted engineering stages should:
 
 1. update this status file in place;
-2. append the detailed stage record to the history file;
-3. add/update the evidence index entry;
-4. commit source + documentation together whenever source is accepted;
-5. keep docs-only checkpoints separate from source acceptance.
+2. append detailed chronology to the current history part, creating another
+   part when the render-size threshold is reached;
+3. update `linux-port-history.md` navigation/integrity metadata;
+4. add/update the evidence index entry;
+5. commit source + documentation together whenever source is accepted;
+6. keep docs-only checkpoints separate from source acceptance.
 
-If any compact summary conflicts with detailed recorded evidence, the detailed
-history plus the referenced evidence archive and Git object are authoritative.
+If a compact summary conflicts with detailed evidence, the cited evidence
+archive plus Git/source/artifact identities are authoritative.
 
 ## 3. Target and scope
 
