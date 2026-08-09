@@ -26,7 +26,7 @@ description.
 ### Current accepted stage
 
 ```text
-Stage 4d.1 — access-owner lifecycle metadata discovery
+Stage 4d.2 — access-owner native class identity
 ```
 
 Accepted pre-checkpoint repository baseline:
@@ -39,29 +39,29 @@ HEAD / origin:
 260b18bc8a91bc41185e92f22ffbf31df56ce8e2
 ```
 
-Accepted Stage 4d.1 candidate identity:
+Accepted Stage 4d.2 candidate identity:
 
 ```text
 Version:
-0.1.0-linux-stage4d.1-access-owner-lifecycle-metadata
+0.1.0-linux-stage4d.2-access-owner-native-class-identity
 
 Source SHA256:
-9718e87ed41cc6e4796a42f04c9e8bc860cb0ff04ea64c6a4a05ee2c9123e88c
+f0c83cfb73711c5fa3d98c4b435cfa46e28f7a15da13f073e1eb4fc847068b19
 
 Build script SHA256:
-65c03f728367e8c90be9f7e003eeabbf3972217de50c2b593752be6c84f57aba
+0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
 
 Artifact SHA256:
-2ad96fc6902eb2a7d5af9b1d1de00c0b309d78fed202a4c975e2927ec020c48e
+aeb061c77fea73b055e7a0d88fe7850977894292589d542e75e4284e5e24ed76
 
 Build ID:
-3c02857ee2acf535a8474117ba175fdeec0b2572
+ce4320a4141c2cc53dbee0a88122cdd694061bd7
 ```
 
-Accepted Stage 4d.1 runtime evidence archive SHA256:
+Accepted Stage 4d.2 runtime evidence archive SHA256:
 
 ```text
-5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
+5afabb231cb198ffe00fc70c34f7b14725caa873d3596751b435598348920b21
 ```
 
 Current isolated populated-world baseline remains:
@@ -169,11 +169,17 @@ on every PalServer run. It must not be frozen across restarts.
     `PalItemContainer`, or `PalItemContainerManager`.
 20. Stage 4d.1 found none of those twelve names on the coherent backing UObject
     returned by `GetItemChestContainerAccess`.
-21. That backing UObject matched none of the exact predicted
-    `PalMapObjectItemChestModel`, `PalMapObjectItemStorageModel`,
-    `PalMapObjectGuildChestModel`, or `PalMapObjectGlobalPalStorageModel`
-    classes and is currently classified as `OTHER_EXACT_CLASS`.
-22. Accepted isolated runtime experiments complete the 180-second stability
+21. That backing UObject matched none of the four originally predicted
+    map-object model classes.
+22. Stage 4d.2 identified the backing UObject as the exact native
+    `PalMapObjectItemContainerModule` class, with direct native superclass
+    `PalMapObjectConcreteModelModuleBase`.
+23. All 2,005 native Palworld class candidates were queried read-only;
+    2,003 resolved, with exactly one exact-class match and exactly one
+    direct-superclass match.
+24. The access-owner class and object both reported process-local FName
+    comparison index `292821`; the direct superclass reported `287367`.
+25. Accepted isolated runtime experiments complete the 180-second stability
     window, restore the isolated mod/save exactly, and leave production
     unchanged.
 
@@ -273,26 +279,35 @@ The following routes must not be casually reopened:
 ### What is not yet proven
 
 1. The exact operation that creates `PalContainerId -> GuildId` membership.
-2. The exact runtime class identity of the
-   `GetItemChestContainerAccess` backing UObject.
-3. Whether association requires a multi-step setup/registration/lifecycle
+2. Whether the access-interface backing UObject is the exact same module
+   instance returned by `GetItemContainerModule`.
+3. How a built guild chest's item-container module and membership differ from
+   an ordinary unregistered chest and a known registered storage control.
+4. Whether association requires a multi-step setup/registration/lifecycle
    sequence.
-4. Removal/unregistration behaviour.
-5. Full 285-pair registration and reconciliation.
-6. Persistence or reconstruction behaviour across restart.
-7. Server-authoritative integrated material routing/consumption.
-8. Player-visible integrated-storage behaviour on Linux.
+5. Removal/unregistration behaviour.
+6. Full 285-pair registration and reconciliation.
+7. Persistence or reconstruction behaviour across restart.
+8. Server-authoritative integrated material routing/consumption.
+9. Player-visible integrated-storage behaviour on Linux.
 
 ### Next stage
 
 ```text
-Stage 4d.2 — exact access-owner runtime class identification
+Stage 4d.3 — guild-storage anchor comparison
 ```
 
-Stage 4d.2 should remain read-only. It should identify the exact runtime class
-and name of the coherent backing UObject returned by
-`GetItemChestContainerAccess` without broad graph traversal, manager-map
-access, bulk `PalItemContainer` processing, or lifecycle candidate invocation.
+Stage 4d.3 remains read-only. It should compare an ordinary unregistered
+physical chest, a built guild chest, and a known registered storage control
+through the already accepted module / `PalContainerId` / manager-membership /
+access-interface path.
+
+The first new question is whether the object backing
+`GetItemChestContainerAccess` is pointer-identical to the exact
+`PalMapObjectItemContainerModule` returned by `GetItemContainerModule`.
+The comparison must not use manager-map traversal, broad reflected graphs,
+bulk `PalItemContainer` processing, lifecycle candidate calls, or production
+mutation.
 
 ## 2. Repository and branch strategy
 
@@ -2068,6 +2083,9 @@ Stage 4d.0:
 
 Stage 4d.1:
 5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
+
+Stage 4d.2:
+5afabb231cb198ffe00fc70c34f7b14725caa873d3596751b435598348920b21
 ```
 
 The normal isolated state remains:
@@ -4300,27 +4318,245 @@ exactly and production remained unchanged.
 
 ---
 
-## 44. Immediate next action
+## 44. Stage 4d.2 — access-owner native class identity
 
-Run Stage 4d.2:
+### Goal
+
+Identify the exact runtime class of the coherent backing UObject returned by
+`GetItemChestContainerAccess` without reopening the known Linux string-lifetime
+hazard or any blocked broad-reflection route.
+
+### Candidate identity
 
 ```text
-exact access-owner runtime class identification
+Version:
+0.1.0-linux-stage4d.2-access-owner-native-class-identity
+
+Repository HEAD:
+309d36452f1e9f7df25c78173989d08c37d9e2cd
+
+Source SHA256:
+f0c83cfb73711c5fa3d98c4b435cfa46e28f7a15da13f073e1eb4fc847068b19
+
+Build script SHA256:
+0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
+
+Artifact SHA256:
+aeb061c77fea73b055e7a0d88fe7850977894292589d542e75e4284e5e24ed76
+
+Build ID:
+ce4320a4141c2cc53dbee0a88122cdd694061bd7
 ```
 
-Required work:
+### Identification method
 
-1. Start from the formally accepted Stage 4d.1 state.
-2. Invoke only the already accepted `GetItemChestContainerAccess` getter.
-3. Identify the exact runtime class/name of its coherent backing UObject using
-   a narrow read-only API.
-4. Do not broad-traverse reflected fields or object graphs.
-5. Do not access manager maps.
-6. Do not bulk-process `PalItemContainer` objects.
-7. Invoke no lifecycle candidate function.
-8. Perform no target-storage mutation.
-9. Preserve the mature planner invariant.
-10. Restore the isolated environment exactly and verify production continuity.
+At build time, the live PalServer binary's native `UPal*` / `APal*` vtable
+symbols were demangled and converted into exact reflected
+`/Script/Pal.<Class>` lookups.
 
-Only after the backing object's exact runtime identity is known should another
-registration-owner hypothesis be selected.
+Generated candidate set:
+
+```text
+native_candidates=2005
+vtable_native_class_names=2005
+```
+
+Runtime compared only `UClass*` pointers against the access-owner class and its
+direct superclass.
+
+No runtime call was made to:
+
+```text
+GetName
+GetFullName
+GetPathName
+FName::ToString
+```
+
+The accepted ProcessEvent envelope remained:
+
+```text
+physical chest: 2
+module:         1
+manager:        2
+target storage: 0
+```
+
+Lifecycle lookups and candidate calls remained zero.
+
+### Runtime result
+
+The selected physical chest remained:
+
+```text
+ContainerId:
+30df4c2d00486b01c5daecae42017e27
+
+membership:
+00000000000000000000000000000000
+```
+
+The game-returned access interface remained coherent and nonnull.
+
+Native class-resolution result:
+
+```text
+native_candidates=2005
+lookups=2005
+resolved=2003
+
+class_matches=1
+class=PalMapObjectItemContainerModule
+
+direct_super_matches=1
+direct_super=PalMapObjectConcreteModelModuleBase
+
+identity_resolution=NATIVE_EXACT_CLASS
+```
+
+Process-local FName comparison indexes:
+
+```text
+access-owner class:
+292821
+
+access-owner object:
+292821
+
+direct superclass:
+287367
+```
+
+### Accepted interpretation
+
+`GetItemChestContainerAccess` is backed by an exact native
+`PalMapObjectItemContainerModule` UObject.
+
+Its direct native superclass is:
+
+```text
+PalMapObjectConcreteModelModuleBase
+```
+
+The access owner is therefore not a separate guild-storage proxy class.
+
+Stage 4d.2 does not yet prove that the returned access-owner pointer is
+pointer-identical to the module pointer returned by `GetItemContainerModule`;
+that becomes the first comparison in Stage 4d.3.
+
+### Stability and restoration
+
+The identity probe completed exactly once.
+
+```text
+runtime name conversion=0
+lifecycle lookups=0
+candidate calls=0
+allocator/fatal markers=0
+```
+
+The isolated server remained stable for 180 seconds.
+
+One new UE4SS crash filename appeared:
+
+```text
+crash_111.log
+```
+
+It was zero bytes and contained no fatal marker.
+
+The mature planner remained:
+
+```text
+guilds=8
+active_guilds=7
+chests=157
+storages=20
+pairs=285
+own_camp=157
+```
+
+with all duplicate, conflict, null, invalid, missing, zero-guild, and
+without-storage counters equal to zero.
+
+The naturally running `Level.sav` changed during the test, then the isolated
+state restored exactly:
+
+```text
+Restored mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Restored Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+Restored player saves:
+19
+```
+
+Production continuity remained:
+
+```text
+PID:
+83
+
+StartedAt:
+2026-08-08T18:30:02.661576192Z
+```
+
+Evidence archive SHA256:
+
+```text
+5afabb231cb198ffe00fc70c34f7b14725caa873d3596751b435598348920b21
+```
+
+---
+
+## 45. Immediate next action
+
+Run Stage 4d.3:
+
+```text
+guild-storage anchor comparison
+```
+
+Required read-only comparison:
+
+1. ordinary selected unregistered physical chest;
+2. one built guild chest;
+3. one known registered storage control.
+
+For each object, capture the already accepted semantic chain:
+
+```text
+physical/model object
+  -> GetItemContainerModule
+  -> exact module pointer
+  -> GetContainerId
+  -> PalContainerId
+  -> manager GetContainer
+  -> GetGroupIdByItemContainerId
+  -> GetItemChestContainerAccess where supported
+  -> access-owner pointer and exact native class
+```
+
+The first explicit test must compare:
+
+```text
+GetItemContainerModule module pointer
+vs
+GetItemChestContainerAccess backing UObject pointer
+```
+
+No mutation is allowed.
+
+Do not reopen:
+
+- direct `ItemContainerMap_InServer` inspection;
+- broad graph / `TFieldRange` traversal;
+- bulk `PalItemContainer` processing;
+- the exhausted fixed property/accessor guesses;
+- standalone target-storage lifecycle callbacks.
+
+The purpose is to establish whether the built guild chest exposes the same
+module/access-owner architecture but with a native nonzero guild membership,
+which would make it a canonical guild-storage association anchor.
