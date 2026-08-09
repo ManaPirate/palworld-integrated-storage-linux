@@ -39,11 +39,9 @@ Windows builds are outside the current scope.
 
 ## Engineering record
 
-Linux port engineering documentation is split into three purpose-specific records:
+Linux port engineering documentation lives in a single file:
 
-- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, and immediate next stage.
-- [`docs/linux-port-history.md`](docs/linux-port-history.md) — detailed chronological record of stages, experiments, failures, accepted results, and recovery actions.
-- [`docs/linux-port-evidence-index.md`](docs/linux-port-evidence-index.md) — compact index of major stage classifications, commits, artifact identities, and evidence archives.
+- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, immediate next stage, and a chronological stage-by-stage log.
 
 ## Attribution
 
