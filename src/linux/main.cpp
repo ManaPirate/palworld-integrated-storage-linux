@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <new>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -696,6 +697,7 @@ namespace
     std::atomic_bool g_fname_probe_attempted{false};
     std::atomic_bool g_pool_fname_probe_9b_attempted{false};
     std::atomic_bool g_pool_fname_probe_9c_attempted{false};
+    std::atomic_bool g_pool_fname_probe_9d_attempted{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -1337,6 +1339,45 @@ namespace
         }
     }
 
+    auto stage4d9d_probe_arm_file_present() noexcept -> bool
+    {
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &ModIntegratedStorageModulePin::
+                        g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        try
+        {
+            std::string arm_path{
+                module_info.dli_fname
+            };
+
+            arm_path += ".stage4d9d-leaked-tostring-arm";
+
+            return
+                ::access(
+                    arm_path.c_str(),
+                    F_OK
+                ) == 0;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
     auto stage4d9b_bytes_to_hex(
         const void* data,
         std::size_t size
@@ -1675,6 +1716,178 @@ namespace
             emit_marker(
                 "[ModIntegratedStorageCpp] "
                 "TOSTRING_ONLY_PROBE RESULT=EXCEPTION"
+            );
+        }
+    }
+
+    // Isolated, opt-in, single-shot diagnostic. Stage 4d.9a/4d.9b/4d.9c
+    // all proved FName::ToString() returns a correct decoded value and
+    // then the process crashes with "FMallocBinned2 Attempt to realloc
+    // an unrecognized block" shortly after the call returns -- not
+    // during the call itself. In every prior stage, the returned
+    // FString-like value goes out of scope (its destructor runs) before
+    // the crash. This stage tests whether that destructor -- not the
+    // ToString() call -- is the actual corrupting operation: it calls
+    // ToString() on the same pool-sourced FName as 4d.9b/4d.9c, reads
+    // its length, then placement-constructs the returned value into a
+    // raw byte buffer and deliberately never calls its destructor
+    // (an intentional, single-shot, diagnostic-only leak of one small
+    // string buffer). If the crash disappears, the corruption is in the
+    // mismatched destructor/deallocation path, not in ToString() itself,
+    // and FName::ToString() may remain usable in production as long as
+    // its result is deliberately leaked rather than destructed normally.
+    auto run_stage4d9d_leaked_tostring_probe(
+        const std::vector<
+            std::pair<TransportItemNameKey, std::int64_t>
+        >& ordered_pool
+    ) noexcept -> void
+    {
+        static const bool armed =
+            stage4d9d_probe_arm_file_present();
+
+        if (!armed)
+        {
+            return;
+        }
+
+        bool expected_attempted{false};
+
+        if (
+            !g_pool_fname_probe_9d_attempted.
+                compare_exchange_strong(
+                    expected_attempted,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        emit_marker(
+            "[ModIntegratedStorageCpp] "
+            "LEAKED_TOSTRING_PROBE START"
+        );
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE "
+                "RESULT=SKIPPED_NOT_GAME_THREAD"
+            );
+
+            return;
+        }
+
+        if (
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            ) != 1
+        )
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE "
+                "RESULT=SKIPPED_NOT_DEDICATED"
+            );
+
+            return;
+        }
+
+        if (ordered_pool.empty())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE "
+                "RESULT=SKIPPED_NO_POOL_ITEMS"
+            );
+
+            return;
+        }
+
+        const auto& first_key = ordered_pool[0].first;
+
+        if (sizeof(RC::Unreal::FName) != first_key.size())
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE "
+                "RESULT=SKIPPED_SIZE_MISMATCH "
+                "fname_size=%zu key_size=%zu",
+                sizeof(RC::Unreal::FName),
+                first_key.size()
+            );
+
+            return;
+        }
+
+        try
+        {
+            RC::Unreal::FName reconstructed_fname{};
+
+            std::memcpy(
+                &reconstructed_fname,
+                first_key.data(),
+                first_key.size()
+            );
+
+            const auto comparison_index =
+                reconstructed_fname.GetComparisonIndex();
+
+            const auto number =
+                reconstructed_fname.GetNumber();
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE OBTAINED "
+                "comparison_index=%u number=%u",
+                static_cast<unsigned>(comparison_index),
+                static_cast<unsigned>(number)
+            );
+
+            using ToStringResultType =
+                decltype(reconstructed_fname.ToString());
+
+            alignas(ToStringResultType)
+                static unsigned char
+                    leaked_storage[sizeof(ToStringResultType)];
+
+            auto* const leaked_result =
+                ::new (
+                    static_cast<void*>(leaked_storage)
+                ) ToStringResultType(
+                    reconstructed_fname.ToString()
+                );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE TOSTRING_RETURNED"
+            );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE LENGTH length=%zu",
+                static_cast<std::size_t>(
+                    leaked_result->size()
+                )
+            );
+
+            // Deliberately not calling leaked_result's destructor.
+            // This intentionally leaks the one small string buffer
+            // ToString() allocated, exactly once, for this diagnostic.
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE RESULT=PASS"
+            );
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_PROBE RESULT=EXCEPTION"
             );
         }
     }
@@ -2892,6 +3105,7 @@ namespace
 
             run_stage4d9b_pool_fname_probe(ordered_pool);
             run_stage4d9c_tostring_only_probe(ordered_pool);
+            run_stage4d9d_leaked_tostring_probe(ordered_pool);
 
             const auto guild_hex =
                 guid_to_hex(selected_guild);
@@ -13925,15 +14139,16 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.9c-tostring-isolation-probe");
+                STR("0.1.0-linux-stage4d.9d-leaked-tostring-probe");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only transport "
                     "metadata and bounded foreign-pool probe, plus "
                     "opt-in isolated FName::ToString() diagnostics: "
-                    "GetFName()-obtained, memcpy'd/pool-sourced, and "
-                    "pool-sourced-without-RC::to_string()-conversion."
+                    "GetFName()-obtained, memcpy'd/pool-sourced, "
+                    "pool-sourced-without-RC::to_string()-conversion, "
+                    "and pool-sourced-with-intentionally-leaked-result."
                 );
 
             ModAuthors =
