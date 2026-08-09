@@ -36,6 +36,7 @@
 
 #include <unistd.h>
 
+#include <Helpers/String.hpp>
 #include <Mod/CppUserModBase.hpp>
 
 #include <Unreal/CoreUObject/UObject/Class.hpp>
@@ -692,6 +693,7 @@ namespace
     std::atomic_bool g_access_owner_class_identity_reported{false};
     std::atomic_bool g_semantic_repeatability_complete{false};
     std::atomic_bool g_transport_metadata_reported{false};
+    std::atomic_bool g_fname_probe_attempted{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -12358,6 +12360,231 @@ namespace
         }
     }
 
+    // Stage 4d.9a — isolated FName::ToString() diagnostic probe.
+    //
+    // Stage 4d.8b concluded FName::ToString() is hard-blocked on this
+    // pinned NullPrism runtime (MallocBinned2 canary fatal) after calling
+    // it on an FName read out of the bounded transport pool. But the
+    // NullPrism/RE-UE4SS-Linux framework itself calls FName::ToString()
+    // constantly and successfully elsewhere in the same process (Lua
+    // bindings, dumpers, the live debugger), including as an accepted
+    // Palworld dedicated-server acceptance criterion. That is inconsistent
+    // with a platform-level block, and points instead at heap corruption
+    // introduced earlier in the bounded-pool walk that only surfaced on
+    // the next allocation.
+    //
+    // This probe isolates the variable: obtain an FName the ordinary way
+    // (UClass::GetFName(), already proven safe elsewhere in this file) with
+    // no dependency on the bounded-pool/reflection pipeline, then call
+    // ToString() on it alone. Each step emits its own marker so the exact
+    // point of failure — if any — is unambiguous from the log alone.
+    //
+    // Opt-in only: requires an explicit ".stage4d9a-fname-probe-arm"
+    // sentinel file next to main.so. Does not read, touch, or alter the
+    // accepted registration or transport-metadata code paths.
+    auto stage4d9a_probe_arm_file_present() noexcept -> bool
+    {
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &ModIntegratedStorageModulePin::
+                        g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        try
+        {
+            std::string arm_path{
+                module_info.dli_fname
+            };
+
+            arm_path += ".stage4d9a-fname-probe-arm";
+
+            return
+                ::access(
+                    arm_path.c_str(),
+                    F_OK
+                ) == 0;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    auto stage4d9a_bytes_to_hex(
+        const void* data,
+        std::size_t size
+    ) -> std::string
+    {
+        constexpr char HexDigits[] = "0123456789abcdef";
+        const auto* bytes =
+            static_cast<const unsigned char*>(data);
+
+        std::string result;
+        result.reserve(size * 2);
+
+        for (std::size_t index = 0; index < size; ++index)
+        {
+            result.push_back(
+                HexDigits[(bytes[index] >> 4) & 0x0F]
+            );
+            result.push_back(
+                HexDigits[bytes[index] & 0x0F]
+            );
+        }
+
+        return result;
+    }
+
+    auto run_stage4d9a_fname_probe(
+        RC::Unreal::UClass* base_camp_class
+    ) noexcept -> void
+    {
+        static const bool armed =
+            stage4d9a_probe_arm_file_present();
+
+        if (!armed)
+        {
+            return;
+        }
+
+        bool expected_attempted{false};
+
+        if (
+            !g_fname_probe_attempted.compare_exchange_strong(
+                expected_attempted,
+                true,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        emit_marker(
+            "[ModIntegratedStorageCpp] "
+            "FNAME_PROBE START"
+        );
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE RESULT=SKIPPED_NOT_GAME_THREAD"
+            );
+
+            return;
+        }
+
+        if (
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            ) != 1
+        )
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE RESULT=SKIPPED_NOT_DEDICATED"
+            );
+
+            return;
+        }
+
+        if (base_camp_class == nullptr)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE RESULT=SKIPPED_NO_CLASS"
+            );
+
+            return;
+        }
+
+        try
+        {
+            const auto probe_fname =
+                base_camp_class->GetFName();
+
+            const auto comparison_index =
+                probe_fname.GetComparisonIndex();
+
+            const auto number =
+                probe_fname.GetNumber();
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE OBTAINED "
+                "comparison_index=%u number=%u",
+                static_cast<unsigned>(comparison_index),
+                static_cast<unsigned>(number)
+            );
+
+            // This is the exact operation stage 4d.8b crashed inside of.
+            // If the process dies before the next marker, the crash is
+            // localized to FName::ToString() itself on this runtime, and
+            // stage 4d.8b's hard-block conclusion holds.
+            const auto wide_result =
+                probe_fname.ToString();
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE TOSTRING_RETURNED"
+            );
+
+            // Same conversion idiom the framework itself uses internally
+            // (e.g. UE4SS/src/USMapGenerator/Generator.cpp,
+            // to_string(N.first.ToString())) rather than hand-rolling a
+            // char16_t buffer copy.
+            const auto narrow_result =
+                RC::to_string(wide_result);
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE CONVERTED"
+            );
+
+            const auto hex =
+                stage4d9a_bytes_to_hex(
+                    narrow_result.data(),
+                    narrow_result.size()
+                );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE VALUE length=%zu hex=%s",
+                narrow_result.size(),
+                hex.c_str()
+            );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE RESULT=PASS"
+            );
+        }
+        catch (...)
+        {
+            // A genuine allocator fatal (as seen in stage 4d.8b) is not a
+            // C++ exception and will not be caught here — this only
+            // protects against unrelated exceptions (e.g. std::bad_alloc)
+            // from the surrounding code.
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FNAME_PROBE RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto run_read_only_chest_association() -> void
     {
         auto& chests = get_chest_discovery_buffer();
@@ -13064,6 +13291,8 @@ namespace
             planned_run
         );
 
+        run_stage4d9a_fname_probe(base_camp_class);
+
         run_controlled_semantic_observation(
             registration_probe_guild,
             plan_complete,
@@ -13271,12 +13500,13 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.8a-transport-metadata-r2");
+                STR("0.1.0-linux-stage4d.9a-fname-tostring-probe");
 
             ModDescription =
                 STR(
                     "Linux dedicated-server read-only transport "
-                    "metadata and bounded foreign-pool probe."
+                    "metadata and bounded foreign-pool probe, plus an "
+                    "opt-in isolated FName::ToString() diagnostic."
                 );
 
             ModAuthors =
