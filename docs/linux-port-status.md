@@ -26,8 +26,11 @@ description.
 ### Current accepted engineering state
 
 ```text
-Latest committed / pushed accepted checkpoint:
+Latest committed / pushed source checkpoint:
 Stage 4d.5b — GuildChestModel null-module controlled negative
+
+Latest accepted engineering stage:
+Stage 4d.6 — server-side upstream parity audit
 ```
 
 Repository checkpoint:
@@ -37,7 +40,7 @@ Branch:
 linux/nullprism-dedicated-server
 
 HEAD / origin:
-bd19c4e4adcde9e37df262027eefac6d02b7ac57
+3ddb8c60466b76a75db0eb879954049db64159a7
 
 Parent:
 8c072462bb16740c6449ff0ab43072a6a2c57471
@@ -5008,41 +5011,136 @@ runtime callback.
 
 ---
 
-## 51. Immediate next action
+---
 
-Run Stage 4d.6:
+## 51. Stage 4d.6 — server-side upstream parity audit
+
+### Classification
 
 ```text
-server-side upstream parity audit
+STATIC / READ-ONLY — ACCEPTED
 ```
 
-This is a static/read-only source audit. No PalServer runtime is required.
+Evidence archive SHA256:
+
+```text
+00b381468e6acf6efccafb352585480752204da7101145fad08171660e0277f4
+```
+
+Repository state captured by the audit:
+
+```text
+HEAD / origin:
+3ddb8c60466b76a75db0eb879954049db64159a7
+
+Working tree:
+clean
+
+Linux source SHA256:
+7a63fd68448290aa9a3b6e78099e3948618c97198254ef9ff09860773b256092
+
+Windows source SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+
+Runsheet SHA256 before this Stage-4d.6 update:
+70f6c4cecf90d518ed0fa7ce705e79be34d8ee419d5ec2c844c54a427b392679
+```
+
+The preserved Windows source matched `upstream/main` exactly.
+
+### Accepted parity result
+
+The Linux implementation already reproduces the upstream dedicated-server
+discovery/planning semantics needed to create foreign registration pairs:
+
+- every base camp, including empty camps;
+- guild association through `GroupIdBelongTo`;
+- storage discovery from `ModuleArray`;
+- chest discovery;
+- current chest camp through `GetBaseCampModelBelongTo`;
+- same-guild grouping;
+- own-camp exclusion;
+- eight-second discovery/planning cadence;
+- exact reflected
+  `PalBaseCampModuleItemStorage.OnAvailableConcreteModel_ServerInternal(chest)`
+  registration function and argument shape.
+
+The populated-world Linux planner remains the mature 157-chest / 20-storage /
+285-pair plan.
+
+### Upstream dependency correction
+
+The exact upstream server source contains zero references to:
+
+```text
+GetGroupIdByItemContainerId
+GetItemContainerModule
+OnReadyItemContainerGuildChest
+OnUpdateItemContainerInGuildItemStorage
+OnUpdateItemContainerModule
+OnUpdateItemContainer
+```
+
+Those late discovery surfaces are not prerequisites in upstream's server
+cross-registration implementation.
+
+The unchanged manager-membership oracle therefore does not establish that the
+upstream registration call is ineffective.
+
+### `g_srvInjecting`
+
+Upstream's `g_srvInjecting` variable is written around the reconcile registration
+loop and reset on world change, but the current upstream source never reads or
+branches on it. It is not an effective upstream behavioural dependency.
+
+### Actual parity gap
+
+The Linux source already replans every eight seconds, but normal runtime does not
+execute the mature plan.
+
+The only implemented mutation path is the Stage-4c.3 development helper
+`run_controlled_single_registration`, which:
+
+1. returns unless the `.stage4c3-arm` file exists; and
+2. uses `g_single_registration_attempted` to permit at most one registration
+   call for the process.
+
+Upstream instead executes every foreign pair during every authority reconcile.
+
+The actual missing server-side behaviour is therefore:
+
+```text
+full-plan registration execution
+```
+
+not a hidden membership/lifecycle callback.
+
+---
+
+## 52. Immediate next action
+
+Run Stage 4d.7a:
+
+```text
+arm-gated full-plan registration executor
+```
 
 Required work:
 
-1. Extract the dedicated-server execution path from `src/dllmain.cpp`:
-   - server-role gate;
-   - camp/guild/chest/storage discovery;
-   - same-guild / different-camp filtering;
-   - reentrancy guard;
-   - registration function and argument;
-   - registration cadence / reconciliation;
-   - any server-side data/query path that consumes the registration.
-2. Map each upstream operation to `src/linux/main.cpp` and classify it as:
-   - exact semantic equivalent already implemented;
-   - Linux-specific equivalent;
-   - intentionally omitted client/Windows-only code;
-   - genuinely missing server-side behaviour.
-3. Explicitly search the upstream server path for any dependency on:
-   - `GetGroupIdByItemContainerId`;
-   - `PalContainerId -> GuildId` association;
-   - guild-chest lifecycle callbacks discovered in Stage 4d.4r.
-4. Do not infer that those mechanisms are required if upstream does not use
-   them.
-5. Identify the direct functional server-side observable that proves a foreign
-   chest is contributing to Integrated Storage.
-6. Only then design the next isolated single-pair runtime acceptance around that
-   observable.
-
-No source mutation, registration call, lifecycle callback, full-plan loop, or
-production deployment is part of Stage 4d.6.
+1. Preserve the mature planner and its complete invariants.
+2. Add an isolated-test-only arm for full-plan mutation.
+3. On one armed full-plan pass, execute every deduplicated `(chest, storage)`
+   foreign pair through the already validated
+   `OnAvailableConcreteModel_ServerInternal(chest)` call.
+4. Require dedicated-server role and Unreal game thread.
+5. Record planned, attempted, completed, blocked, and exception counts.
+6. Do not require any `PalContainerId -> GuildId` transition.
+7. Do not invoke any Stage-4d lifecycle candidate.
+8. Keep normal unarmed runtime mutation-free.
+9. Verify server stability, exact isolated restoration, and production
+   continuity.
+10. After the executor itself is safe, perform a functional consume test:
+    build/craft at one camp using material present only in a same-guild foreign
+    camp chest.
+11. Only after functional acceptance enable the full-plan executor periodically
+    on the normal eight-second reconcile.
