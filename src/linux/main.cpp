@@ -163,6 +163,16 @@ namespace
     };
 
 
+    struct RegistrationExecutionPair
+    {
+        RC::Unreal::UObject* chest{};
+        RC::Unreal::UObject* chest_camp{};
+        RC::Unreal::UObject* storage{};
+        RC::Unreal::UObject* storage_camp{};
+        GuildKey guild{};
+    };
+
+
     struct RegistrationCallMetadata
     {
         RC::Unreal::UFunction* function{};
@@ -604,10 +614,10 @@ namespace
     std::atomic_bool g_chest_association_running{false};
     std::atomic_bool g_chest_association_enabled{false};
 
-    std::atomic_bool g_single_registration_attempted{false};
-    std::atomic_bool g_single_registration_completed{false};
-    std::atomic_bool g_single_registration_gate_reported{false};
-    std::atomic_bool g_single_registration_blocked_reported{false};
+    std::atomic_bool g_full_plan_registration_attempted{false};
+    std::atomic_bool g_full_plan_registration_completed{false};
+    std::atomic_bool g_full_plan_registration_gate_reported{false};
+    std::atomic_bool g_full_plan_registration_blocked_reported{false};
 
     std::atomic_bool g_observability_metadata_reported{false};
     std::atomic_bool g_item_storage_linkage_reported{false};
@@ -1124,7 +1134,7 @@ namespace
     }
 
 
-    auto stage4c3_arm_file_present() noexcept -> bool
+    auto stage4d7a_arm_file_present() noexcept -> bool
     {
         Dl_info module_info{};
 
@@ -1149,7 +1159,7 @@ namespace
                 module_info.dli_fname
             };
 
-            arm_path += ".stage4c3-arm";
+            arm_path += ".stage4d7a-arm";
 
             return
                 ::access(
@@ -8656,7 +8666,7 @@ namespace
             }
 
             if (
-                !g_single_registration_completed.load(
+                !g_full_plan_registration_completed.load(
                     std::memory_order_acquire
                 )
             )
@@ -10546,22 +10556,18 @@ namespace
         }
     }
 
-    auto run_controlled_single_registration(
-        RC::Unreal::UObject* chest,
-        RC::Unreal::UObject* chest_camp,
-        RC::Unreal::UObject* target_storage,
-        RC::Unreal::UObject* target_camp,
-        const GuildKey& planned_guild,
+    auto run_controlled_full_plan_registration(
+        const std::vector<RegistrationExecutionPair>& execution_pairs,
         const RegistrationCallMetadata& metadata,
         bool plan_complete,
         std::uint64_t planned_run
     ) -> void
     {
         static const bool armed =
-            stage4c3_arm_file_present();
+            stage4d7a_arm_file_present();
 
         if (
-            !g_single_registration_gate_reported.exchange(
+            !g_full_plan_registration_gate_reported.exchange(
                 true,
                 std::memory_order_acq_rel
             )
@@ -10571,14 +10577,14 @@ namespace
             {
                 emit_marker(
                     "[ModIntegratedStorageCpp] "
-                    "SINGLE_REGISTER GATE=ARMED"
+                    "FULL_PLAN_REGISTER GATE=ARMED"
                 );
             }
             else
             {
                 emit_marker(
                     "[ModIntegratedStorageCpp] "
-                    "SINGLE_REGISTER GATE=DISABLED"
+                    "FULL_PLAN_REGISTER GATE=DISABLED"
                 );
             }
         }
@@ -10587,40 +10593,6 @@ namespace
         {
             return;
         }
-
-        GuildKey chest_guild{};
-        GuildKey target_guild{};
-
-        const bool chest_guild_valid =
-            copy_guild_key(
-                chest_camp,
-                chest_guild
-            ) &&
-            !guid_is_zero(chest_guild);
-
-        const bool target_guild_valid =
-            copy_guild_key(
-                target_camp,
-                target_guild
-            ) &&
-            !guid_is_zero(target_guild);
-
-        const bool same_guild =
-            chest_guild_valid &&
-            target_guild_valid &&
-            chest_guild == target_guild &&
-            chest_guild == planned_guild;
-
-        const bool different_camps =
-            chest_camp != nullptr &&
-            target_camp != nullptr &&
-            chest_camp != target_camp;
-
-        const bool storage_class_valid =
-            class_is(
-                target_storage,
-                get_storage_module_class()
-            );
 
         const bool game_thread =
             RC::Unreal::IsInGameThreadRaw();
@@ -10652,21 +10624,17 @@ namespace
                         RC::Unreal::UObject*
                     );
 
-        const bool safe_to_call =
+        const bool safe_to_begin =
             plan_complete &&
-            chest != nullptr &&
-            target_storage != nullptr &&
-            different_camps &&
-            same_guild &&
-            storage_class_valid &&
+            !execution_pairs.empty() &&
             game_thread &&
             dedicated &&
             parameter_layout_valid;
 
-        if (!safe_to_call)
+        if (!safe_to_begin)
         {
             if (
-                !g_single_registration_blocked_reported.exchange(
+                !g_full_plan_registration_blocked_reported.exchange(
                     true,
                     std::memory_order_acq_rel
                 )
@@ -10674,23 +10642,14 @@ namespace
             {
                 emit_format(
                     "[ModIntegratedStorageCpp] "
-                    "SINGLE_REGISTER run=%llu "
-                    "plan=%d chest=%d chest_camp=%d "
-                    "target=%d target_camp=%d "
-                    "different_camps=%d same_guild=%d "
-                    "storage_class=%d game_thread=%d "
+                    "FULL_PLAN_REGISTER run=%llu "
+                    "plan=%d pairs=%zu game_thread=%d "
                     "dedicated=%d metadata=%d",
                     static_cast<unsigned long long>(
                         planned_run
                     ),
                     plan_complete ? 1 : 0,
-                    chest != nullptr ? 1 : 0,
-                    chest_camp != nullptr ? 1 : 0,
-                    target_storage != nullptr ? 1 : 0,
-                    target_camp != nullptr ? 1 : 0,
-                    different_camps ? 1 : 0,
-                    same_guild ? 1 : 0,
-                    storage_class_valid ? 1 : 0,
+                    execution_pairs.size(),
                     game_thread ? 1 : 0,
                     dedicated ? 1 : 0,
                     parameter_layout_valid ? 1 : 0
@@ -10698,7 +10657,7 @@ namespace
 
                 emit_marker(
                     "[ModIntegratedStorageCpp] "
-                    "SINGLE_REGISTER RESULT=BLOCKED"
+                    "FULL_PLAN_REGISTER RESULT=BLOCKED"
                 );
             }
 
@@ -10708,7 +10667,7 @@ namespace
         bool expected_attempted{false};
 
         if (
-            !g_single_registration_attempted.
+            !g_full_plan_registration_attempted.
                 compare_exchange_strong(
                     expected_attempted,
                     true,
@@ -10722,63 +10681,270 @@ namespace
 
         emit_format(
             "[ModIntegratedStorageCpp] "
-            "SINGLE_REGISTER run=%llu "
-            "plan=1 chest=1 chest_camp=1 "
-            "target=1 target_camp=1 "
-            "different_camps=1 same_guild=1 "
-            "storage_class=1 game_thread=1 "
-            "dedicated=1 metadata=1 "
-            "parms=%zu offset=%d size=%d",
+            "FULL_PLAN_REGISTER START run=%llu "
+            "planned=%zu parms=%zu offset=%d size=%d",
             static_cast<unsigned long long>(
                 planned_run
             ),
+            execution_pairs.size(),
             metadata.parameter_bytes,
             metadata.parameter_offset,
             metadata.property_size
         );
 
-        try
-        {
-            auto parameters =
-                std::make_unique<std::byte[]>(
-                    metadata.parameter_bytes
-                );
-
-            std::memset(
-                parameters.get(),
-                0,
+        auto parameters =
+            std::make_unique<std::byte[]>(
                 metadata.parameter_bytes
             );
 
-            std::memcpy(
-                parameters.get() +
-                    static_cast<std::size_t>(
-                        metadata.parameter_offset
+        std::size_t attempted{};
+        std::size_t completed{};
+        std::size_t blocked{};
+        std::size_t exceptions{};
+        std::size_t function_mismatches{};
+        std::size_t guild_mismatches{};
+        std::size_t camp_mismatches{};
+        std::size_t storage_class_mismatches{};
+        bool first_failure_reported{};
+
+        // Prevalidate the entire execution set before the first mutation.
+        // A malformed pair therefore cannot leave a partially executed pass.
+        for (const auto& pair : execution_pairs)
+        {
+            GuildKey chest_guild{};
+            GuildKey storage_guild{};
+
+            const bool chest_guild_valid =
+                copy_guild_key(
+                    pair.chest_camp,
+                    chest_guild
+                ) &&
+                !guid_is_zero(chest_guild);
+
+            const bool storage_guild_valid =
+                copy_guild_key(
+                    pair.storage_camp,
+                    storage_guild
+                ) &&
+                !guid_is_zero(storage_guild);
+
+            const bool same_guild =
+                chest_guild_valid &&
+                storage_guild_valid &&
+                chest_guild == storage_guild &&
+                chest_guild == pair.guild;
+
+            const bool different_camps =
+                pair.chest_camp != nullptr &&
+                pair.storage_camp != nullptr &&
+                pair.chest_camp != pair.storage_camp;
+
+            const bool storage_class_valid =
+                class_is(
+                    pair.storage,
+                    get_storage_module_class()
+                );
+
+            RC::Unreal::UFunction* pair_function{};
+
+            if (pair.storage != nullptr)
+            {
+                pair_function =
+                    pair.storage->
+                        GetFunctionByNameInChain(
+                            STR(
+                                "OnAvailableConcreteModel_"
+                                "ServerInternal"
+                            )
+                        );
+            }
+
+            const bool function_matches =
+                pair_function != nullptr &&
+                pair_function == metadata.function;
+
+            const bool pair_safe =
+                pair.chest != nullptr &&
+                pair.storage != nullptr &&
+                different_camps &&
+                same_guild &&
+                storage_class_valid &&
+                function_matches;
+
+            if (pair_safe)
+            {
+                continue;
+            }
+
+            ++blocked;
+
+            if (!same_guild)
+            {
+                ++guild_mismatches;
+            }
+
+            if (!different_camps)
+            {
+                ++camp_mismatches;
+            }
+
+            if (!storage_class_valid)
+            {
+                ++storage_class_mismatches;
+            }
+
+            if (!function_matches)
+            {
+                ++function_mismatches;
+            }
+
+            if (!first_failure_reported)
+            {
+                first_failure_reported = true;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "FULL_PLAN_REGISTER FIRST_BLOCK "
+                    "run=%llu chest=%d chest_camp=%d "
+                    "storage=%d storage_camp=%d "
+                    "different_camps=%d same_guild=%d "
+                    "storage_class=%d function=%d",
+                    static_cast<unsigned long long>(
+                        planned_run
                     ),
-                &chest,
-                sizeof(chest)
+                    pair.chest != nullptr ? 1 : 0,
+                    pair.chest_camp != nullptr ? 1 : 0,
+                    pair.storage != nullptr ? 1 : 0,
+                    pair.storage_camp != nullptr ? 1 : 0,
+                    different_camps ? 1 : 0,
+                    same_guild ? 1 : 0,
+                    storage_class_valid ? 1 : 0,
+                    function_matches ? 1 : 0
+                );
+            }
+        }
+
+        if (blocked != 0)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "FULL_PLAN_REGISTER SUMMARY run=%llu "
+                "planned=%zu attempted=0 completed=0 "
+                "blocked=%zu exceptions=0 "
+                "function_mismatches=%zu guild_mismatches=%zu "
+                "camp_mismatches=%zu storage_class_mismatches=%zu "
+                "game_thread=1 dedicated=1 metadata=1",
+                static_cast<unsigned long long>(
+                    planned_run
+                ),
+                execution_pairs.size(),
+                blocked,
+                function_mismatches,
+                guild_mismatches,
+                camp_mismatches,
+                storage_class_mismatches
             );
 
-            target_storage->ProcessEvent(
-                metadata.function,
-                parameters.get()
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "FULL_PLAN_REGISTER RESULT=INCOMPLETE"
             );
 
-            g_single_registration_completed.store(
+            return;
+        }
+
+        for (const auto& pair : execution_pairs)
+        {
+            ++attempted;
+
+            try
+            {
+                std::memset(
+                    parameters.get(),
+                    0,
+                    metadata.parameter_bytes
+                );
+
+                auto* chest = pair.chest;
+
+                std::memcpy(
+                    parameters.get() +
+                        static_cast<std::size_t>(
+                            metadata.parameter_offset
+                        ),
+                    &chest,
+                    sizeof(chest)
+                );
+
+                pair.storage->ProcessEvent(
+                    metadata.function,
+                    parameters.get()
+                );
+
+                ++completed;
+            }
+            catch (...)
+            {
+                ++exceptions;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "FULL_PLAN_REGISTER FIRST_EXCEPTION "
+                    "run=%llu index=%zu",
+                    static_cast<unsigned long long>(
+                        planned_run
+                    ),
+                    attempted - 1
+                );
+
+                break;
+            }
+        }
+
+        const bool passed =
+            exceptions == 0 &&
+            attempted == execution_pairs.size() &&
+            completed == execution_pairs.size();
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "FULL_PLAN_REGISTER SUMMARY run=%llu "
+            "planned=%zu attempted=%zu completed=%zu "
+            "blocked=%zu exceptions=%zu "
+            "function_mismatches=%zu guild_mismatches=%zu "
+            "camp_mismatches=%zu storage_class_mismatches=%zu "
+            "game_thread=1 dedicated=1 metadata=1",
+            static_cast<unsigned long long>(
+                planned_run
+            ),
+            execution_pairs.size(),
+            attempted,
+            completed,
+            blocked,
+            exceptions,
+            function_mismatches,
+            guild_mismatches,
+            camp_mismatches,
+            storage_class_mismatches
+        );
+
+        if (passed)
+        {
+            g_full_plan_registration_completed.store(
                 true,
                 std::memory_order_release
             );
 
             emit_marker(
                 "[ModIntegratedStorageCpp] "
-                "SINGLE_REGISTER RESULT=CALLED"
+                "FULL_PLAN_REGISTER RESULT=PASS"
             );
         }
-        catch (...)
+        else
         {
             emit_marker(
                 "[ModIntegratedStorageCpp] "
-                "SINGLE_REGISTER RESULT=EXCEPTION"
+                "FULL_PLAN_REGISTER RESULT=INCOMPLETE"
             );
         }
     }
@@ -11149,6 +11315,11 @@ namespace
             RegistrationPlanPairHash
         > planned_pair_set{};
 
+        std::vector<RegistrationExecutionPair>
+            planned_execution_pairs{};
+
+        planned_execution_pairs.reserve(512);
+
         RC::Unreal::UObject*
             registration_probe_chest{};
 
@@ -11247,6 +11418,16 @@ namespace
                     ++guild_pairs;
                     ++planned_pairs;
 
+                    planned_execution_pairs.push_back(
+                        RegistrationExecutionPair{
+                            chest,
+                            chest_camp,
+                            storage,
+                            storage_camp,
+                            guild_key
+                        }
+                    );
+
                     const auto fingerprint =
                         registration_pair_fingerprint(
                             guild_key,
@@ -11315,6 +11496,8 @@ namespace
                 associated_chests &&
             planned_storages > 0 &&
             planned_pairs > 0 &&
+            planned_execution_pairs.size() ==
+                planned_pairs &&
             registration_probe_chest != nullptr &&
             registration_probe_target_storage !=
                 nullptr &&
@@ -11459,12 +11642,8 @@ namespace
             plan_complete
         );
 
-        run_controlled_single_registration(
-            registration_probe_chest,
-            registration_probe_chest_camp,
-            registration_probe_target_storage,
-            registration_probe_target_camp,
-            registration_probe_guild,
+        run_controlled_full_plan_registration(
+            planned_execution_pairs,
             registration_metadata,
             plan_complete,
             planned_run
@@ -11677,12 +11856,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.5b-guild-chest-module-subtype-bridge");
+                STR("0.1.0-linux-stage4d.7a-arm-gated-full-plan-executor");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only access-owner "
-                    "native class identity discovery."
+                    "Linux dedicated-server arm-gated full-plan "
+                    "server registration executor."
                 );
 
             ModAuthors =

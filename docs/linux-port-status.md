@@ -26,45 +26,54 @@ description.
 ### Current accepted engineering state
 
 ```text
-Latest committed / pushed source checkpoint:
-Stage 4d.5b — GuildChestModel null-module controlled negative
+Latest accepted source/runtime stage:
+Stage 4d.7a — arm-gated full-plan registration executor
 
-Latest accepted engineering stage:
+Latest accepted static/parity stage:
 Stage 4d.6 — server-side upstream parity audit
 ```
 
-Repository checkpoint:
+Repository parent checkpoint immediately before the Stage 4d.7a source commit:
 
 ```text
 Branch:
 linux/nullprism-dedicated-server
 
 HEAD / origin:
-3ddb8c60466b76a75db0eb879954049db64159a7
-
-Parent:
-8c072462bb16740c6449ff0ab43072a6a2c57471
+15e5243dbed1b3cc4e8c7cf60d5a1eaa879d7b19
 
 Commit message:
-Stage 4d.5b: characterize GuildChest null module route
+docs: record Stage 4d.6 server parity audit
 
-Committed Linux source SHA256:
-7a63fd68448290aa9a3b6e78099e3948618c97198254ef9ff09860773b256092
+Working tree before the Stage 4d.7a checkpoint:
+src/linux/main.cpp modified only
+```
+
+Accepted Stage 4d.7a candidate identity:
+
+```text
+Version:
+0.1.0-linux-stage4d.7a-arm-gated-full-plan-executor
+
+Source SHA256:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+Artifact SHA256:
+2bbde02085d87d99acce5f0c3f7765e1e95ff6916e875dc25181883cca79c358
+
+Build ID:
+8515573a44f3e9acf92a990dbbf67c7b89c35424
 
 Build script SHA256:
 0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
 
-Committed Stage 4d.5b artifact SHA256:
-f6125e3247d8074045e51d387bf2f3ae260db7d68c25611186a482ac6ab5bd8b
-
-Committed Stage 4d.5b Build ID:
-0cd24fdb32b1d6563d86b713841e5370880d1c9c
-
-Expected repository state before the documentation-repair commit:
-HEAD / origin = bd19c4e4adcde9e37df262027eefac6d02b7ac57
-working tree  = clean
-Windows diff  = empty
+Windows source SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
 ```
+
+The exact Git commit created when Stage 4d.7a source + this runsheet are
+checkpointed together is emitted by the checkpoint wrapper and becomes the
+authoritative repository HEAD/origin after that commit.
 
 The Stage 4d.5b controlled-negative postmortem evidence archive is:
 
@@ -5117,30 +5126,259 @@ not a hidden membership/lifecycle callback.
 
 ---
 
-## 52. Immediate next action
+---
 
-Run Stage 4d.7a:
+## 52. Stage 4d.7a — arm-gated full-plan registration executor
+
+### Classification
 
 ```text
-arm-gated full-plan registration executor
+MUTATING ISOLATED RUNTIME — FULL-PLAN EXECUTOR ACCEPTED
+POST-PASS 180-SECOND STABILITY — HARNESS-INCOMPLETE
 ```
 
-Required work:
+Candidate identity:
 
-1. Preserve the mature planner and its complete invariants.
-2. Add an isolated-test-only arm for full-plan mutation.
-3. On one armed full-plan pass, execute every deduplicated `(chest, storage)`
-   foreign pair through the already validated
-   `OnAvailableConcreteModel_ServerInternal(chest)` call.
-4. Require dedicated-server role and Unreal game thread.
-5. Record planned, attempted, completed, blocked, and exception counts.
-6. Do not require any `PalContainerId -> GuildId` transition.
-7. Do not invoke any Stage-4d lifecycle candidate.
-8. Keep normal unarmed runtime mutation-free.
-9. Verify server stability, exact isolated restoration, and production
-   continuity.
-10. After the executor itself is safe, perform a functional consume test:
-    build/craft at one camp using material present only in a same-guild foreign
-    camp chest.
-11. Only after functional acceptance enable the full-plan executor periodically
-    on the normal eight-second reconcile.
+```text
+Base HEAD:
+15e5243dbed1b3cc4e8c7cf60d5a1eaa879d7b19
+
+Version:
+0.1.0-linux-stage4d.7a-arm-gated-full-plan-executor
+
+Source SHA256:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+Artifact SHA256:
+2bbde02085d87d99acce5f0c3f7765e1e95ff6916e875dc25181883cca79c358
+
+Build ID:
+8515573a44f3e9acf92a990dbbf67c7b89c35424
+
+Build script SHA256:
+0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
+```
+
+### Build acceptance
+
+Stage 4d.7a replaced the old single-pair development executor with an
+explicitly armed one-process-lifetime full-plan executor while preserving the
+mature planner.
+
+Static/build acceptance established:
+
+```text
+executor ProcessEvent source sites=1
+whole-source ProcessEvent source sites=7
+
+old single-registration executor=0
+old single-registration globals=0
+old .stage4c3-arm mutation gate=0
+new .stage4d7a-arm gate=1
+
+executor GetGroupIdByItemContainerId references=0
+executor OnReadyItemContainerGuildChest references=0
+executor OnUpdateItemContainerInGuildItemStorage references=0
+executor OnUpdateItemContainerModule references=0
+executor ItemContainerMap_InServer references=0
+executor TFieldRange references=0
+executor bulk PalItemContainer enumeration=0
+```
+
+The staged `BUILD-PROVENANCE.txt` was corrected after the existing build script
+ran. It contains Stage 4d.7a scope and zero stale Stage 4d.2 markers.
+
+### Full-plan runtime result
+
+The isolated test explicitly created `.stage4d7a-arm` and executed one complete
+mature registration pass.
+
+Accepted telemetry:
+
+```text
+FULL_PLAN_REGISTER GATE=ARMED
+
+FULL_PLAN_REGISTER START
+run=1
+planned=285
+parms=8
+offset=0
+size=8
+
+FULL_PLAN_REGISTER SUMMARY
+planned=285
+attempted=285
+completed=285
+blocked=0
+exceptions=0
+function_mismatches=0
+guild_mismatches=0
+camp_mismatches=0
+storage_class_mismatches=0
+game_thread=1
+dedicated=1
+metadata=1
+
+FULL_PLAN_REGISTER RESULT=PASS
+```
+
+The planner in that execution run remained:
+
+```text
+guilds=8
+active_guilds=7
+chests=157
+storages=20
+pairs=285
+own_camp=157
+
+duplicate_chests=0
+duplicate_storages=0
+duplicate_pairs=0
+chest_camp_conflicts=0
+storage_camp_conflicts=0
+chest_guild_conflicts=0
+storage_guild_conflicts=0
+null_camps=0
+invalid_camps=0
+missing_guild=0
+zero_guild=0
+without_storage=0
+```
+
+Therefore the Linux implementation has runtime proof that it can execute the
+complete upstream-equivalent server registration plan.
+
+### Stability-harness classification
+
+The intended 180-second post-pass stability window is **not** accepted as
+completed.
+
+The original runtime harness checked container-internal `/proc/net/udp` for:
+
+```text
+decimal 18211
+hex 4723
+```
+
+Docker configuration proves the actual mapping is:
+
+```text
+container:
+8211/udp
+hex 2013
+
+host publication:
+127.0.0.1:18211 -> container 8211/udp
+```
+
+The incorrect UDP assertion was reached only after the same stability-loop
+iteration had already passed:
+
+```text
+container running=true
+PalServer child nonnull
+PalServer PID unchanged
+```
+
+The captured runtime log contained zero crash/fatal markers before the harness
+performed its emergency stop.
+
+Two subsequent zero-rerun collector defects were also identified and retained:
+
+1. postmortem V1 incorrectly required `docker port` runtime output from the
+   intentionally stopped restored container;
+2. postmortem V2 depended unnecessarily on the old extracted runtime-script
+   path.
+
+Postmortem V3 bundled and SHA256-pinned the exact original runtime harness and
+removed both defects without rerunning PalServer.
+
+Final V3 result:
+
+```text
+EXECUTOR_CLASSIFICATION=ACCEPTED
+
+FULL_PLAN_PLANNED=285
+FULL_PLAN_ATTEMPTED=285
+FULL_PLAN_COMPLETED=285
+FULL_PLAN_BLOCKED=0
+FULL_PLAN_EXCEPTIONS=0
+FULL_PLAN_FUNCTION_MISMATCHES=0
+FULL_PLAN_GUILD_MISMATCHES=0
+FULL_PLAN_CAMP_MISMATCHES=0
+FULL_PLAN_STORAGE_CLASS_MISMATCHES=0
+FULL_PLAN_GAME_THREAD=1
+FULL_PLAN_DEDICATED=1
+FULL_PLAN_METADATA=1
+FULL_PLAN_RESULT=PASS
+
+POST_PASS_STABILITY_CLASSIFICATION=HARNESS_INCOMPLETE
+CORRECT_CONTAINER_INTERNAL_GAME_PORT=8211
+HOST_PUBLISHED_GAME_PORT=18211
+CRASH_FATAL_MARKERS_BEFORE_HARNESS_STOP=0
+
+ISOLATED_RESTORED=1
+PRODUCTION_UNCHANGED=1
+DEVELOPMENT_CANDIDATE_UNCHANGED=1
+POSTMORTEM_RESULT=PASS
+```
+
+Zero-rerun postmortem evidence archive SHA256:
+
+```text
+ba93cf299fccb1c0dce41690b86f56a4dd20a7fa11c69554be5f24f7553a9298
+```
+
+### Accepted conclusion
+
+Stage 4d.7a proves:
+
+```text
+the Linux dedicated-server port can execute all 285 planned same-guild
+foreign-camp registrations through the same reflected
+PalBaseCampModuleItemStorage.OnAvailableConcreteModel_ServerInternal(chest)
+operation used by upstream
+```
+
+It does not yet prove player-visible/native consume behaviour.
+
+---
+
+## 53. Immediate next action
+
+Run Stage 4d.7b:
+
+```text
+functional cross-camp consume acceptance
+```
+
+Goal:
+
+```text
+prove a real native server build/craft action at Camp B can consume material
+stored only in a same-guild foreign Camp A chest after full-plan registration
+```
+
+Required design:
+
+1. Keep the accepted Stage 4d.7a full-plan executor and explicit isolated-test
+   arm.
+2. Correct the liveness check to container-internal UDP `8211`, not host
+   published UDP `18211`.
+3. Snapshot and later restore the complete isolated world and normal mod.
+4. Select two camps in the same guild already represented by the mature plan.
+5. Establish a controlled material requirement where target Camp B lacks enough
+   locally and same-guild foreign Camp A contains the required amount.
+6. Record the relevant material quantities and locations before registration.
+7. Execute the full 285-pair registration pass.
+8. Perform a real native build/craft action at Camp B requiring that material.
+9. Prove the action succeeds and authoritative storage state reflects the
+   expected consumption.
+10. Require the same PalServer PID, internal UDP 8211 availability and zero
+    crash/fatal markers throughout the functional window.
+11. Restore isolated state exactly and verify production continuity.
+12. Do not use `GetGroupIdByItemContainerId` as the success criterion.
+13. Do not invoke late Stage-4d lifecycle callbacks.
+14. Only after functional acceptance design normal recurring unarmed
+    eight-second registration execution.
