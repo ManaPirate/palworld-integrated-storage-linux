@@ -6535,45 +6535,194 @@ BLOCKED BY DIRECT ToString DEPENDENCY
 
 ---
 
-## 58. Immediate next action
+---
 
-Run Stage 4d.8d:
+## 58. Stage 4d.8d — lower-level FName entry / name-pool audit
+
+### Classification
 
 ```text
-lower-level FName entry / name-pool static recovery audit
+STATIC / READ-ONLY — ACCEPTED
+
+STATIC_CLASSIFICATION:
+INCOMPLETE_NO_LOWER_LEVEL_PATH
+
+ONE_NAME_RUNTIME_PROBE_ELIGIBLE:
+0
 ```
 
-No runtime probe yet.
+Evidence archive SHA256:
 
-Required static work:
+```text
+93cb769883a719361d7f535f130e8cef415d8ab6116b125991f10bc345a26eeb
+```
 
-1. Inspect the pinned NullPrism source for:
-   - `FNameEntryId`;
-   - `FNameEntry`;
-   - `FNamePool`;
-   - `FNameEntryAllocator`;
+Accepted state remained:
+
+```text
+HEAD / origin:
+d1cdebfff2a58011ea64c10e8fd32c82cd501564
+
+Linux source SHA256:
+4d8247d7beb1fea72df0d91cfd653dfb016b2d43deff299c3e7439baac984000
+
+artifact SHA256:
+10c2b8e3c60ba4e618c6709397c097694255ed7b0174bcdbd1d968e09645c594
+
+Build ID:
+671730ac4ee16633a317409cd1e9c552b19baca3
+
+runsheet SHA256 before this checkpoint:
+058b876cbb70c2e38f703b0fb1fcd32ea32ba5b292a1f233b2ec5d3a9d8afe21
+```
+
+### C++ lower-level chain result
+
+The pinned NullPrism C++ source contains useful FName primitives:
+
+```text
+FNameEntryId hits=46
+FNameEntry hits=54
+GetComparisonIndex hits=97
+GetDisplayIndex hits=7
+GetNumber hits=22
+NAME_NO_NUMBER_INTERNAL hits=3
+NAME_INTERNAL_TO_EXTERNAL hits=2
+```
+
+but it does not expose the required complete direct-entry chain.
+
+Exact negative results:
+
+```text
+FNamePool hits=0
+FNameEntryAllocator hits=0
+NamePoolData hits=0
+
+GetNameLength hits=0
+GetUnterminatedName hits=0
+AppendNameToString hits=0
+
+pool access hits=0
+```
+
+Parsed implementation-body matrix:
+
+```text
+resolve_method_bodies=0
+length_method_bodies=0
+copy_method_bodies=0
+wide_method_bodies=0
+
+safe_resolve_body=0
+safe_length_body=0
+safe_fixed_buffer_copy_body=0
+
+pool_access_visible=0
+pool_access_nonalloc_contexts=0
+```
+
+Number semantics remain visible and accepted:
+
+```text
+number_semantics_visible=1
+
+NAME_NO_NUMBER_INTERNAL = 0
+NAME_INTERNAL_TO_EXTERNAL(x) = x - 1
+```
+
+### Accepted conclusion
+
+The pinned C++ side does not provide enough evidence to construct:
+
+```text
+FNameEntryId
+    ->
+reachable FNamePool
+    ->
+Resolve(entry)
+    ->
+length / width metadata
+    ->
+caller-owned fixed-buffer copy
+```
+
+without relying on the already-blocked public string helpers.
+
+Therefore:
+
+```text
+direct FName::ToString:
+BLOCKED
+
+FName::GetPlainNameString:
+BLOCKED
+
+lower-level C++ name-pool runtime probe:
+NOT AUTHORIZED
+```
+
+Do not invent raw FNamePool offsets or scan the process manually from this
+evidence.
+
+### New evidence: Rust patternsleuth resolver surface
+
+The accepted `libUE4SS.so` symbol survey exposed:
+
+```text
+<patternsleuth::resolvers::unreal::fname::FNamePool>::dyn_resolver
+<patternsleuth::resolvers::unreal::fname::FNamePool>::resolver
+<patternsleuth::resolvers::unreal::fname::FNamePool as core::str::traits::FromStr>::from_str
+```
+
+This is a new static lead.
+
+The Stage 4d.8d analyzer scanned C/C++ source extensions only, so these Rust
+resolver symbols were not characterized.
+
+This does not yet prove that a usable FNamePool address is exported to the C++
+API or that entry reads are safe. It only proves a resolver implementation is
+present in the linked loader.
+
+---
+
+## 59. Immediate next action
+
+Run Stage 4d.8e:
+
+```text
+patternsleuth FNamePool resolver static audit
+```
+
+No runtime.
+
+Required work:
+
+1. Search the pinned NullPrism tree and vendored/build dependency sources for
+   Rust files implementing:
+   - `patternsleuth::resolvers::unreal::fname::FNamePool`;
+   - its `resolver` and `dyn_resolver`;
+   - relevant FName/FNamePool pattern definitions.
+2. Determine exactly what the resolver returns:
+   - address of `FNamePool`;
+   - address of a pointer to `FNamePool`;
    - `NamePoolData`;
-   - entry-resolution helpers;
-   - fixed-buffer / unterminated-name copy helpers;
-   - length / wide-name metadata.
-2. Determine whether the accepted 32-bit comparison/display index can be
-   resolved to character data without calling:
-   - `FName::ToString`;
-   - `FName::GetPlainNameString`;
-   - `FString`;
-   - Unreal heap allocation.
-3. Require an implementation body, not only a declaration.
-4. Identify whether the path is supported by the pinned Linux runtime or is
-   Windows-only / uninitialized.
-5. Keep FName Number handling separate:
-   - internal 0 means no suffix;
-   - nonzero internal number must be rendered using external `number - 1`.
-6. If and only if a direct fixed-buffer entry path is statically proven,
-   design a one-name runtime probe.
-7. Do not start PalServer in Stage 4d.8d.
-8. Do not modify the accepted Linux source.
-9. Keep broad `FindAllOf("PalItemContainer")` blocked.
-10. Keep direct `FName::ToString` and `GetPlainNameString` blocked.
-11. Practical transport acceptance later still requires a new same-guild base
-    created after server boot and actual execution of the expanded registration
-    plan.
+   - constructor/function address;
+   - or another structure.
+3. Identify the matched instruction/pattern and pointer arithmetic.
+4. Determine whether the resolved address is already consumed by NullPrism or
+   exposed through any C++/FFI surface.
+5. Search Rust/C++ bridge code for a getter or global storing the resolved
+   FNamePool address.
+6. Identify engine-version assumptions and Linux-specific handling.
+7. Do not infer FNamePool layout from unrelated Windows UE versions.
+8. Do not start PalServer.
+9. Do not modify the accepted mod source.
+10. If the resolver gives a concrete name-pool address but no safe entry-layout
+    implementation is exposed, classify the chain as incomplete.
+11. Only authorize a future runtime probe if both are statically proven:
+    - a reachable runtime pool address;
+    - a bounded, allocation-free entry decoding layout for the pinned engine.
+12. Keep `FName::ToString` and `GetPlainNameString` blocked.
+13. Practical transport acceptance later must still include post-startup
+    same-guild base creation and execution of the expanded registration plan.
