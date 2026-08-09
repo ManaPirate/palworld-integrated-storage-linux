@@ -29,6 +29,9 @@ description.
 Latest accepted source/runtime stage:
 Stage 4d.7a — arm-gated full-plan registration executor
 
+Latest accepted functional observation:
+Stage 4d.7b — remote-client gate characterization
+
 Latest accepted static/parity stage:
 Stage 4d.6 — server-side upstream parity audit
 ```
@@ -5345,40 +5348,287 @@ It does not yet prove player-visible/native consume behaviour.
 
 ---
 
-## 53. Immediate next action
+---
 
-Run Stage 4d.7b:
+## 53. Stage 4d.7b — remote-client functional gate characterization
 
-```text
-functional cross-camp consume acceptance
-```
-
-Goal:
+### Classification
 
 ```text
-prove a real native server build/craft action at Camp B can consume material
-stored only in a same-guild foreign Camp A chest after full-plan registration
+MUTATING ISOLATED RUNTIME — ACCEPTED OBSERVATION
+
+REMOTE CLIENT OUTCOME:
+CLIENT_BLOCKED
+
+SERVER CONSUME PATH:
+NOT EXERCISED
+
+STABILITY:
+ACCEPTED
 ```
 
-Required design:
+Evidence archive SHA256:
 
-1. Keep the accepted Stage 4d.7a full-plan executor and explicit isolated-test
-   arm.
-2. Correct the liveness check to container-internal UDP `8211`, not host
-   published UDP `18211`.
-3. Snapshot and later restore the complete isolated world and normal mod.
-4. Select two camps in the same guild already represented by the mature plan.
-5. Establish a controlled material requirement where target Camp B lacks enough
-   locally and same-guild foreign Camp A contains the required amount.
-6. Record the relevant material quantities and locations before registration.
-7. Execute the full 285-pair registration pass.
-8. Perform a real native build/craft action at Camp B requiring that material.
-9. Prove the action succeeds and authoritative storage state reflects the
-   expected consumption.
-10. Require the same PalServer PID, internal UDP 8211 availability and zero
-    crash/fatal markers throughout the functional window.
-11. Restore isolated state exactly and verify production continuity.
-12. Do not use `GetGroupIdByItemContainerId` as the success criterion.
-13. Do not invoke late Stage-4d lifecycle callbacks.
-14. Only after functional acceptance design normal recurring unarmed
-    eight-second registration execution.
+```text
+1ab94e147e650f02cb98fc1a6416355d9755eb902f2805df3693221f2c665560
+```
+
+Screenshot archive SHA256:
+
+```text
+cdb1f654795f64f5e4b94478ec9b6c6178e51cd3ef80aae13c60556ad8995e4b
+```
+
+Repository/source identity remained:
+
+```text
+HEAD / origin:
+7761f2507ce08adb1c3635e224132de1c3fa388a
+
+Linux source SHA256:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+Artifact SHA256:
+2bbde02085d87d99acce5f0c3f7765e1e95ff6916e875dc25181883cca79c358
+
+Build ID:
+8515573a44f3e9acf92a990dbbf67c7b89c35424
+
+Windows source SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+
+Runsheet SHA256 before this update:
+74fed9ceca8658ab439c2455997d518228c16d9a0976b349fb2dc94125f43dae
+```
+
+### Correction to the operator-entered label
+
+The finish harness recorded:
+
+```text
+FUNCTIONAL_OUTCOME=SERVER_FAILED
+```
+
+because that value was entered manually.
+
+The supporting observation says:
+
+```text
+CLIENT_UI_RESULT=showed the materials as not available
+SERVER_ACTION_RESULT=nothing, couldn't execute due to not having materials
+```
+
+Under the Stage 4d.7b test definitions, that is not `SERVER_FAILED`.
+
+The accepted evidence-based classification is:
+
+```text
+CLIENT_BLOCKED
+```
+
+because the client refused the action before an authoritative server build/craft
+request could exercise cross-camp consumption.
+
+The original manual `SERVER_FAILED` label is retained in the evidence archive as
+historical raw input and must not be silently rewritten.
+
+### Screenshot result
+
+The screenshot archive characterized four same-guild camps:
+
+```text
+Camp A
+main base=yes
+literal Guild Chest present=yes
+existed before server boot=yes
+
+Camp B
+main base=no
+literal Guild Chest present=no
+existed before server boot=yes
+
+Camp C
+main base=no
+literal Guild Chest present=yes
+existed before server boot=yes
+
+Camp D
+main base=no
+literal Guild Chest present=no
+existed before server boot=no
+```
+
+The client build menu showed a strong local-visibility split.
+
+At Camps A and C, which had a literal Guild Chest present, multiple material
+counts were visible and multiple tested recipes had those materials available.
+
+At Camp B, which existed before boot but had no literal Guild Chest, the client
+showed several tested materials as unavailable and refused the build/craft
+action.
+
+At Camp D, which had no literal Guild Chest and was created after boot, the
+client likewise showed the tested materials unavailable.
+
+This is direct remote-client gate evidence. It is not proof that the server
+would reject a valid request because no valid request reached the server.
+
+### Upstream parity interpretation
+
+Current upstream documentation explicitly separates the roles:
+
+```text
+dedicated server:
+authoritative cross-registration and consumption
+
+remote client:
+display + client-side craft/build gate
+
+transport:
+server sends the remote client's far-camp material pool
+```
+
+It also explicitly states that without the remote-client display/gate path the
+local menu may refuse even though server-authoritative consumption itself does
+not depend on that client detour layer.
+
+Therefore the Stage 4d.7b result is consistent with the intentionally incomplete
+remote-client half of the current Linux-server integration.
+
+### Full-plan executor remained accepted
+
+The test started from the accepted Stage 4d.7a source and again produced exactly
+one clean full-plan execution:
+
+```text
+planned=285
+attempted=285
+completed=285
+blocked=0
+exceptions=0
+function_mismatches=0
+guild_mismatches=0
+camp_mismatches=0
+storage_class_mismatches=0
+game_thread=1
+dedicated=1
+metadata=1
+FULL_PLAN_RESULT=PASS
+```
+
+No executor failure occurred.
+
+### Stage 4d.7a stability caveat closed by later evidence
+
+Before restore, the finish harness reported:
+
+```text
+seconds since full-plan PASS=2265
+isolated PalServer PID=244
+expected isolated PID=244
+correct container-internal UDP 8211=PASS
+crash/fatal markers=0
+```
+
+The 2,265-second live interval is more than twelve times the previously intended
+180-second window.
+
+Therefore the older Stage 4d.7a classification:
+
+```text
+POST-PASS 180-SECOND STABILITY — HARNESS-INCOMPLETE
+```
+
+is superseded by later accepted runtime evidence:
+
+```text
+POST-PASS STABILITY — ACCEPTED
+minimum observed interval=2265 seconds
+same PalServer PID
+internal UDP 8211 available
+zero crash/fatal markers
+```
+
+### Live camp topology change
+
+The session also produced a useful reconciliation observation.
+
+Initial accepted execution:
+
+```text
+run=1
+guilds=8
+storages=20
+pairs=285
+```
+
+During the live session the planner later observed:
+
+```text
+guild 20f979c33446e7f1f8cea19499aad71a
+storages=4
+
+global:
+storages=21
+pairs=307
+```
+
+The screenshot notes independently record that Camp D did not exist before
+server boot.
+
+This demonstrates that the mature periodic planner can discover a new same-guild
+camp after startup.
+
+The Stage 4d.7a executor is intentionally one-shot, so the new 307-pair plan was
+not executed. Camp D therefore cannot be used as evidence against the accepted
+startup 285-pair executor.
+
+It does provide direct evidence for the final production requirement:
+
+```text
+registration execution must reconcile periodically,
+not only once at process startup
+```
+
+### Restoration and continuity
+
+The finish harness accepted:
+
+```text
+isolated mod restored=PASS
+isolated Level.sav restored=PASS
+player saves=19
+production PID unchanged=PASS
+production StartedAt unchanged=PASS
+production RestartCount unchanged=PASS
+repository unchanged=PASS
+```
+
+---
+
+## 54. Immediate next action
+
+Run Stage 4d.8:
+
+```text
+remote-client transport parity audit
+```
+
+The next server-side work is not another container-membership probe and not a
+retry of the blocked unmodified client action.
+
+Audit the upstream reflection-only transport path required by remote clients:
+
+1. identify the exact client request RPC and server receive surface;
+2. identify how the server resolves the requesting player's current camp;
+3. identify how upstream calculates `(guild pooled storage - own camp storage)`;
+4. identify the exact reply RPC/payload format sent back to the client;
+5. compare those reflection surfaces against the current Linux source;
+6. preserve the accepted 285/285 registration executor;
+7. do not port Windows AOB material-scan detours into the Linux server;
+8. keep Windows client source unchanged;
+9. define the minimum Linux-server transport implementation needed so an
+   upstream Windows client can receive far-camp material totals;
+10. after transport parity, test with the upstream client half installed;
+11. after client-gate functional acceptance, replace the one-shot executor with
+   the accepted periodic reconcile required for newly created camps.
