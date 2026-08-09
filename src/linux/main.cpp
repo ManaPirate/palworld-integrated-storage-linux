@@ -698,6 +698,7 @@ namespace
     std::atomic_bool g_pool_fname_probe_9b_attempted{false};
     std::atomic_bool g_pool_fname_probe_9c_attempted{false};
     std::atomic_bool g_pool_fname_probe_9d_attempted{false};
+    std::atomic_bool g_pool_fname_probe_9e_attempted{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -1378,6 +1379,45 @@ namespace
         }
     }
 
+    auto stage4d9e_probe_arm_file_present() noexcept -> bool
+    {
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &ModIntegratedStorageModulePin::
+                        g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        try
+        {
+            std::string arm_path{
+                module_info.dli_fname
+            };
+
+            arm_path += ".stage4d9e-leaked-tostring-chardata-arm";
+
+            return
+                ::access(
+                    arm_path.c_str(),
+                    F_OK
+                ) == 0;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
     auto stage4d9b_bytes_to_hex(
         const void* data,
         std::size_t size
@@ -1888,6 +1928,208 @@ namespace
             emit_marker(
                 "[ModIntegratedStorageCpp] "
                 "LEAKED_TOSTRING_PROBE RESULT=EXCEPTION"
+            );
+        }
+    }
+
+    // Isolated, opt-in, single-shot diagnostic. Stage 4d.9d proved that
+    // suppressing the destructor of FName::ToString()'s result eliminates
+    // the FMallocBinned2 corruption entirely -- but it only ever read
+    // .size() off the leaked result. This stage tests the remaining open
+    // variable for the leak-and-cache production design (§5/§8 of
+    // docs/linux-port-status.md): is it safe to read the *character data*
+    // out of a leaked, never-destructed ToString() result via
+    // RC::to_string()'s char16_t-to-std::string conversion? It calls
+    // ToString() on the same pool-sourced FName as 4d.9b/4d.9c/4d.9d,
+    // placement-constructs the result into a static buffer exactly like
+    // 4d.9d (never destructed), then -- while that leaked object is still
+    // alive -- runs RC::to_string() on it, copies the converted bytes into
+    // an ordinary std::string, and logs them as hex. The leaked ToString()
+    // result itself is still never destructed. If this passes and the
+    // server keeps running, both halves of the leak-and-cache design
+    // (obtaining the value, and reading its character data) are proven
+    // safe.
+    auto run_stage4d9e_leaked_tostring_chardata_probe(
+        const std::vector<
+            std::pair<TransportItemNameKey, std::int64_t>
+        >& ordered_pool
+    ) noexcept -> void
+    {
+        static const bool armed =
+            stage4d9e_probe_arm_file_present();
+
+        if (!armed)
+        {
+            return;
+        }
+
+        bool expected_attempted{false};
+
+        if (
+            !g_pool_fname_probe_9e_attempted.
+                compare_exchange_strong(
+                    expected_attempted,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        emit_marker(
+            "[ModIntegratedStorageCpp] "
+            "LEAKED_TOSTRING_CHARDATA_PROBE START"
+        );
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE "
+                "RESULT=SKIPPED_NOT_GAME_THREAD"
+            );
+
+            return;
+        }
+
+        if (
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            ) != 1
+        )
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE "
+                "RESULT=SKIPPED_NOT_DEDICATED"
+            );
+
+            return;
+        }
+
+        if (ordered_pool.empty())
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE "
+                "RESULT=SKIPPED_NO_POOL_ITEMS"
+            );
+
+            return;
+        }
+
+        const auto& first_key = ordered_pool[0].first;
+
+        if (sizeof(RC::Unreal::FName) != first_key.size())
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE "
+                "RESULT=SKIPPED_SIZE_MISMATCH "
+                "fname_size=%zu key_size=%zu",
+                sizeof(RC::Unreal::FName),
+                first_key.size()
+            );
+
+            return;
+        }
+
+        try
+        {
+            RC::Unreal::FName reconstructed_fname{};
+
+            std::memcpy(
+                &reconstructed_fname,
+                first_key.data(),
+                first_key.size()
+            );
+
+            const auto comparison_index =
+                reconstructed_fname.GetComparisonIndex();
+
+            const auto number =
+                reconstructed_fname.GetNumber();
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE OBTAINED "
+                "comparison_index=%u number=%u",
+                static_cast<unsigned>(comparison_index),
+                static_cast<unsigned>(number)
+            );
+
+            using ToStringResultType =
+                decltype(reconstructed_fname.ToString());
+
+            alignas(ToStringResultType)
+                static unsigned char
+                    leaked_storage[sizeof(ToStringResultType)];
+
+            auto* const leaked_result =
+                ::new (
+                    static_cast<void*>(leaked_storage)
+                ) ToStringResultType(
+                    reconstructed_fname.ToString()
+                );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE TOSTRING_RETURNED"
+            );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE LENGTH length=%zu",
+                static_cast<std::size_t>(
+                    leaked_result->size()
+                )
+            );
+
+            // The leaked ToString() result is still alive here (its
+            // destructor has not run and never will). This is the
+            // operation under test: reading its character data via
+            // RC::to_string() while it remains a leaked, undestructed
+            // object -- exactly the shape the production leak-and-cache
+            // design would use.
+            const auto narrow_result =
+                RC::to_string(*leaked_result);
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE CONVERTED"
+            );
+
+            const auto hex =
+                stage4d9b_bytes_to_hex(
+                    narrow_result.data(),
+                    narrow_result.size()
+                );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE VALUE "
+                "length=%zu hex=%s",
+                narrow_result.size(),
+                hex.c_str()
+            );
+
+            // Deliberately not calling leaked_result's destructor.
+            // narrow_result is an ordinary std::string built with the
+            // mod's own libstdc++ allocator, and is safely destructed
+            // normally when it goes out of scope below.
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE RESULT=PASS"
+            );
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAKED_TOSTRING_CHARDATA_PROBE RESULT=EXCEPTION"
             );
         }
     }
@@ -3106,6 +3348,7 @@ namespace
             run_stage4d9b_pool_fname_probe(ordered_pool);
             run_stage4d9c_tostring_only_probe(ordered_pool);
             run_stage4d9d_leaked_tostring_probe(ordered_pool);
+            run_stage4d9e_leaked_tostring_chardata_probe(ordered_pool);
 
             const auto guild_hex =
                 guid_to_hex(selected_guild);
@@ -14139,7 +14382,7 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.9d-leaked-tostring-probe");
+                STR("0.1.0-linux-stage4d.9e-leaked-tostring-chardata-probe");
 
             ModDescription =
                 STR(
@@ -14148,7 +14391,8 @@ namespace
                     "opt-in isolated FName::ToString() diagnostics: "
                     "GetFName()-obtained, memcpy'd/pool-sourced, "
                     "pool-sourced-without-RC::to_string()-conversion, "
-                    "and pool-sourced-with-intentionally-leaked-result."
+                    "pool-sourced-with-intentionally-leaked-result, and "
+                    "pool-sourced-leaked-result-with-chardata-read."
                 );
 
             ModAuthors =
