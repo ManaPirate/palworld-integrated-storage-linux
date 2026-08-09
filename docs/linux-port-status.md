@@ -6879,48 +6879,291 @@ Do not infer the meaning of `FNamePool(pub u64)` from the type alone.
 
 ---
 
-## 60. Immediate next action
+---
 
-Run Stage 4d.8f:
+## 60. Stage 4d.8f — focused patternsleuth FNamePool audit
+
+### Classification
 
 ```text
-focused patternsleuth FNamePool source-body audit
+R1:
+PRE-FLIGHT-REJECTED
+NO MUTATION
+NO BUILD
+NO PALSERVER START
+
+R2:
+STATIC / READ-ONLY — ACCEPTED
+FOCUSED_SOURCE_CAPTURE_COMPLETE_REVIEW_REQUIRED
+
+ONE_NAME_RUNTIME_PROBE_ELIGIBLE:
+0
 ```
 
-No runtime.
+R2 evidence archive SHA256:
 
-Required static work:
+```text
+7f531bf207e95cc109105c38535c3a2af4a1aad94df2a689a72d3c26e434674f
+```
 
-1. Capture the exact pinned submodule commit for:
-   `/workspace/RE-UE4SS-Linux/deps/first/patternsleuth`.
-2. Capture the literal source range around:
-   `patternsleuth/src/resolvers/unreal/fname.rs` lines approximately 320–540.
-3. Identify the exact macro invocation that defines `FNamePool`.
-4. Expand the concrete resolver expression manually from that invocation rather
-   than following only the generic macro-generated wrapper.
-5. Record every architecture/image-specific branch:
-   - PE;
-   - ELF;
-   - Linux-specific logic if present.
-6. Determine exactly what `FNamePool(pub u64)` contains:
-   - pool address;
-   - pointer-to-pool;
-   - `&GNames`;
-   - static indirect name array;
-   - constructor target;
-   - or another address.
-7. Capture the exact pattern/capture arithmetic and any dereference semantics.
-8. Inspect `patternsleuth_bind` for exported resolution functions and determine
-   whether arbitrary named resolvers can be invoked from C++.
-9. Inspect NullPrism C++ callers of patternsleuth_bind and identify whether the
-   resolver result can already be requested by name.
-10. Capture any tests/fixtures exercising `FNamePool`, especially ELF/Linux.
-11. Separately search the full `fname.rs` module for an entry decoder/layout
-    implementation instead of using generic function-name heuristics.
-12. Do not start PalServer.
-13. Do not modify the accepted mod source.
-14. Do not call `FName::ToString` or `GetPlainNameString`.
-15. Only authorize runtime if the exact resolver value semantics, bridge, and
-    bounded entry decoder are all proven from pinned source.
-16. Practical transport acceptance later still requires post-startup same-guild
-    base creation and actual execution of the expanded registration plan.
+Accepted state remained:
+
+```text
+HEAD / origin:
+243057d7e095bc5b26c4af2278fad2b4f5edcbc9
+
+Linux source SHA256:
+4d8247d7beb1fea72df0d91cfd653dfb016b2d43deff299c3e7439baac984000
+
+artifact SHA256:
+10c2b8e3c60ba4e618c6709397c097694255ed7b0174bcdbd1d968e09645c594
+
+Build ID:
+671730ac4ee16633a317409cd1e9c552b19baca3
+
+runsheet SHA256 before this checkpoint:
+23361be3b080c38ac01b180217a8a2650a2206dcc96bbfba717668c24f218dfb
+```
+
+### R1 wrapper failure
+
+R1 incorrectly required a checked-out dependency working tree at:
+
+```text
+/workspace/RE-UE4SS-Linux/deps/first/patternsleuth
+```
+
+The wrapper aborted before any mutation or runtime.
+
+R2 instead used the NullPrism gitlink and retained submodule Git object database.
+
+### Exact pinned patternsleuth identity
+
+NullPrism gitlink:
+
+```text
+deps/first/patternsleuth
+-> 23d13d7471c854fb15b586deb2f2678a1b7bc690
+```
+
+Pinned patternsleuth commit subject:
+
+```text
+fix(linux): resolve console manager references in ELF
+```
+
+Exact materialized FName resolver source:
+
+```text
+patternsleuth/src/resolvers/unreal/fname.rs
+```
+
+SHA256:
+
+```text
+b3a7927e14699ea9fa731ae61a88115b997177f105f9da110b9a54d2a314892f
+```
+
+### FNamePool resolver semantics — proven
+
+Pinned source explicitly states:
+
+```text
+FNamePool: resolved address of the global FName storage.
+
+UE 4.23+:
+the FNamePool struct's static address.
+
+pre-4.23:
+the address of the static pointer to
+TStaticIndirectArrayThreadSafeRead<FNameEntry>
+(i.e. &GNames).
+```
+
+The type is:
+
+```rust
+pub struct FNamePool(pub u64);
+```
+
+The post-4.23 resolver searches for the real FNamePool constructor static-init
+site:
+
+```text
+lea rcx, [pool]
+call FNamePool ctor
+store initialized flag
+```
+
+and converts the captured RIP-relative displacement with:
+
+```rust
+ctx.image().memory.rip4(a)
+```
+
+before returning the unique value.
+
+Therefore, for the post-4.23 branch:
+
+```text
+FNamePool(pub u64)
+=
+direct static address of the FNamePool object
+
+NOT:
+constructor address
+
+NOT:
+pointer-to-pool requiring an extra dereference
+```
+
+The pre-4.23 fallback separately resolves:
+
+```text
+&GNames
+```
+
+and requires version-aware interpretation.
+
+### Existing patternsleuth C bridge does not expose FNamePool
+
+The pinned `patternsleuth_bind` collector used by NullPrism defines:
+
+```text
+UE4SSResolution
+```
+
+with fields for:
+
+```text
+GUObjectArray
+FNameToString
+FNameCtorWchar
+GMalloc
+StaticConstructObjectInternal
+FTextFString
+EngineVersion
+FUObjectHashTablesGet
+GNatives
+ConsoleManagerSingleton
+UGameEngineTick
+```
+
+but **not** `FNamePool`.
+
+NullPrism's corresponding C++ `PsScanResults` mirrors the same field list and
+also has no FNamePool member.
+
+Therefore the compiled FNamePool resolver is not available through the current:
+
+```text
+ps_scan(PsCtx&, PsScanResults&)
+```
+
+ABI consumed by NullPrism.
+
+The generic named-resolver machinery exists in Rust and the CLI, but no pinned
+C ABI for requesting arbitrary named resolver `FNamePool` was proven.
+
+Do not call Rust-mangled resolver symbols directly from the mod.
+
+### No pinned FNameEntry decoder is present
+
+The focused `fname.rs` audit found FNameEntry references only in:
+
+```text
+resolver comments
+constructor fingerprints
+pre-4.23 GNames description
+```
+
+It did not provide:
+
+```text
+FNameEntryHeader layout
+FNameEntryAllocator layout
+block/cursor decoding
+entry length decoder
+wide/ANSI decoder
+caller-owned name-copy function
+```
+
+No `GetUnterminatedName` / fixed-buffer decoder implementation was recovered.
+
+Therefore knowing the FNamePool address alone is insufficient to serialize the
+bounded pool's FName keys safely.
+
+### Accepted engineering conclusion
+
+Current FName string-recovery matrix:
+
+```text
+FName::ToString:
+BLOCKED — runtime allocator fatal
+
+FName::GetPlainNameString:
+BLOCKED — delegates to ToString
+
+C++ FNamePool API:
+INCOMPLETE
+
+patternsleuth FNamePool resolver semantics:
+PROVEN
+
+existing NullPrism/patternsleuth_bind bridge for FNamePool:
+ABSENT
+
+pinned FNameEntry decoder:
+ABSENT
+
+runtime pool/entry probe:
+NOT AUTHORIZED
+```
+
+Do not infer FNameEntry offsets from generic Unreal versions.
+
+---
+
+## 61. Immediate next action
+
+Run Stage 4d.8g:
+
+```text
+current PalServer binary FName decoder static audit
+```
+
+No PalServer runtime.
+
+Required work:
+
+1. Read/copy the installed PalServer ELF without modifying production.
+2. Record exact PalServer binary SHA256 and ELF Build ID.
+3. Use the already-exported `ps_scan_file_ue4ss` offline API against that ELF to
+   obtain:
+   - engine version;
+   - resolved FName ToString address;
+   - resolved FName constructor address;
+   - other existing UE4SS resolution fields for provenance.
+4. Confirm all returned addresses are file/image-relative or virtual-address
+   values according to the pinned offline scanner ABI.
+5. Disassemble a bounded range around the exact FName ToString implementation.
+6. Trace the code path from the FName comparison/display index to:
+   - global name storage reference;
+   - block selection;
+   - entry offset;
+   - entry header;
+   - width flag;
+   - length;
+   - character bytes.
+7. Capture any helper functions called by FName ToString and recurse only into
+   bounded directly-called helpers required for name decoding.
+8. Do not execute FName ToString.
+9. Do not start PalServer.
+10. Do not mutate production or accepted source.
+11. Do not assume generic UE FNamePool layout when the binary can prove it.
+12. If an exact decoder layout can be recovered from current PalServer code,
+    design a one-name read-only runtime probe using that exact layout.
+13. If the decoder remains ambiguous, stop static and classify incomplete.
+14. Keep broad `FindAllOf("PalItemContainer")` blocked.
+15. Practical transport acceptance later still requires post-startup same-guild
+    base creation and actual expanded registration execution.
