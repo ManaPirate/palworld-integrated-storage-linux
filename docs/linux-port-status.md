@@ -6387,30 +6387,193 @@ therefore silently discarding the FName number is not acceptable.
 
 ---
 
-## 57. Immediate next action
+---
 
-Run a non-allocating FName recovery audit before any new runtime attempt.
+## 57. Stage 4d.8c — non-allocating FName recovery audit
 
-Required work:
+### Classification
 
-1. Restore the development source and staged/build artifact to accepted
-   Stage 4d.8a identity.
-2. Inspect the exact pinned NullPrism implementation of
-   `FName::GetPlainNameString`.
-3. Inspect `GetNumber`, `NAME_NO_NUMBER_INTERNAL`, and any internal/external
-   number conversion helper exposed by the pinned source.
-4. Confirm whether `GetPlainNameString` itself calls `FName::ToString` or uses a
-   direct fixed-buffer/name-pool path.
-5. If it is independent of the blocked allocating ToString path, design a
-   one-name runtime probe using only:
-   - one accepted pool FName;
-   - fixed stack `TCHAR[NAME_SIZE]`;
-   - no dynamic Unreal string;
-   - no transport payload;
-   - no network RPC.
-6. Characterize the internal Number field separately.
-7. Only after one-name safety is proven expand to all bounded pool keys.
-8. Keep broad `FindAllOf("PalItemContainer")` blocked.
-9. Keep registration mutation unarmed.
-10. Practical transport acceptance later must still create a same-guild base
-    after server boot and require the expanded registration set to execute.
+```text
+STATIC / READ-ONLY — ACCEPTED
+
+GetPlainNameString recovery candidate:
+BLOCKED_ALLOCATING_DEPENDENCY_VISIBLE
+
+one-name runtime probe:
+NOT ELIGIBLE
+```
+
+Evidence archive SHA256:
+
+```text
+f411fce07ab231d43421840a45f17720cc6d1d1b5e19b30d5ace297f1bc13c2b
+```
+
+Accepted state remained:
+
+```text
+HEAD / origin:
+2506c70318b5c838da3b85ea5289a70dd71e96c0
+
+Linux source SHA256:
+4d8247d7beb1fea72df0d91cfd653dfb016b2d43deff299c3e7439baac984000
+
+artifact SHA256:
+10c2b8e3c60ba4e618c6709397c097694255ed7b0174bcdbd1d968e09645c594
+
+Build ID:
+671730ac4ee16633a317409cd1e9c552b19baca3
+
+runsheet SHA256 before this checkpoint:
+f79d5272d2f70f73a65639e3a358c22d261811291531b4e690833993e43ec333
+
+Windows source SHA256:
+de89622f5e6831f8ea24650f1f59e0d97580c05bc36e7efadfaae9c9cbc8107c
+```
+
+### Exact pinned implementation
+
+The pinned NullPrism source contains the `FName::GetPlainNameString` method body.
+
+It is:
+
+```cpp
+{
+    const uint32 Entry = GetDisplayIndex().ToUnstableInt();
+    auto String = FName(Entry).ToString();
+    std::memcpy(
+        OutName,
+        &String[0],
+        String.size() *
+            sizeof(File::StringType::size_type)
+    );
+    return static_cast<uint32>(String.size());
+}
+```
+
+Therefore the method is not an independent fixed-buffer/name-pool route in this
+pinned NullPrism implementation.
+
+It directly calls:
+
+```text
+FName(Entry).ToString()
+```
+
+which is the path already blocked by the Stage 4d.8b allocator fatal.
+
+Static analyzer result:
+
+```text
+plain_name_method_bodies=1
+plain_name_body_ToString_refs=1
+plain_name_body_FString_refs=0
+plain_name_body_NamePool_refs=0
+plain_name_body_FNameEntry_refs=0
+
+STATIC_CLASSIFICATION=BLOCKED_ALLOCATING_DEPENDENCY_VISIBLE
+ONE_NAME_RUNTIME_PROBE_ELIGIBLE=0
+```
+
+### Number handling remains understood but unresolved for wire text
+
+The pinned header exposes:
+
+```text
+FName.Number at offset 4 in the 8-byte non-case-preserving layout
+GetNumber()
+NAME_NO_NUMBER_INTERNAL = 0
+NAME_INTERNAL_TO_EXTERNAL(x) = x - 1
+NAME_EXTERNAL_TO_INTERNAL(x) = x + 1
+```
+
+The static audit found:
+
+```text
+GetNumber hits=22
+NAME_NO_NUMBER_INTERNAL hits=3
+NAME_INTERNAL_TO_EXTERNAL hits=2
+NAME_EXTERNAL_TO_INTERNAL hits=1
+```
+
+At least one already-observed bounded-pool FName has a non-zero Number field.
+
+Therefore any future wire-name reconstruction must preserve the numbered-name
+suffix semantics and must not serialize only the comparison/display index's
+plain text.
+
+### Accepted engineering conclusion
+
+Do not call:
+
+```text
+FName::GetPlainNameString
+```
+
+at runtime on the assumption that its fixed-buffer signature avoids the blocked
+allocating path.
+
+In the pinned NullPrism build it delegates to `FName::ToString()` and is therefore
+blocked for the same reason.
+
+Do not run the previously proposed one-name `GetPlainNameString` runtime probe.
+
+The following remain accepted:
+
+```text
+Stage 4d.8a bounded binary-key pool:
+foreign chests=22
+unique FName keys=272
+total quantity=69227
+
+direct FName::ToString:
+BLOCKED
+
+FName::GetPlainNameString:
+BLOCKED BY DIRECT ToString DEPENDENCY
+```
+
+---
+
+## 58. Immediate next action
+
+Run Stage 4d.8d:
+
+```text
+lower-level FName entry / name-pool static recovery audit
+```
+
+No runtime probe yet.
+
+Required static work:
+
+1. Inspect the pinned NullPrism source for:
+   - `FNameEntryId`;
+   - `FNameEntry`;
+   - `FNamePool`;
+   - `FNameEntryAllocator`;
+   - `NamePoolData`;
+   - entry-resolution helpers;
+   - fixed-buffer / unterminated-name copy helpers;
+   - length / wide-name metadata.
+2. Determine whether the accepted 32-bit comparison/display index can be
+   resolved to character data without calling:
+   - `FName::ToString`;
+   - `FName::GetPlainNameString`;
+   - `FString`;
+   - Unreal heap allocation.
+3. Require an implementation body, not only a declaration.
+4. Identify whether the path is supported by the pinned Linux runtime or is
+   Windows-only / uninitialized.
+5. Keep FName Number handling separate:
+   - internal 0 means no suffix;
+   - nonzero internal number must be rendered using external `number - 1`.
+6. If and only if a direct fixed-buffer entry path is statically proven,
+   design a one-name runtime probe.
+7. Do not start PalServer in Stage 4d.8d.
+8. Do not modify the accepted Linux source.
+9. Keep broad `FindAllOf("PalItemContainer")` blocked.
+10. Keep direct `FName::ToString` and `GetPlainNameString` blocked.
+11. Practical transport acceptance later still requires a new same-guild base
+    created after server boot and actual execution of the expanded registration
+    plan.
