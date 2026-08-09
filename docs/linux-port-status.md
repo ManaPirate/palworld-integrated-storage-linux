@@ -23,45 +23,51 @@ description.
 
 ## 1. Current position
 
-### Current accepted stage
+### Current accepted engineering state
 
 ```text
-Stage 4d.2 — access-owner native class identity
+Latest committed / pushed accepted checkpoint:
+Stage 4d.5b — GuildChestModel null-module controlled negative
 ```
 
-Accepted pre-checkpoint repository baseline:
+Repository checkpoint:
 
 ```text
 Branch:
 linux/nullprism-dedicated-server
 
 HEAD / origin:
-260b18bc8a91bc41185e92f22ffbf31df56ce8e2
-```
+bd19c4e4adcde9e37df262027eefac6d02b7ac57
 
-Accepted Stage 4d.2 candidate identity:
+Parent:
+8c072462bb16740c6449ff0ab43072a6a2c57471
 
-```text
-Version:
-0.1.0-linux-stage4d.2-access-owner-native-class-identity
+Commit message:
+Stage 4d.5b: characterize GuildChest null module route
 
-Source SHA256:
-f0c83cfb73711c5fa3d98c4b435cfa46e28f7a15da13f073e1eb4fc847068b19
+Committed Linux source SHA256:
+7a63fd68448290aa9a3b6e78099e3948618c97198254ef9ff09860773b256092
 
 Build script SHA256:
 0c31858af8dcd314cccc85e3f6a8b71310e5fba5892c02ec2155aee75aaf9288
 
-Artifact SHA256:
-aeb061c77fea73b055e7a0d88fe7850977894292589d542e75e4284e5e24ed76
+Committed Stage 4d.5b artifact SHA256:
+f6125e3247d8074045e51d387bf2f3ae260db7d68c25611186a482ac6ab5bd8b
 
-Build ID:
-ce4320a4141c2cc53dbee0a88122cdd694061bd7
+Committed Stage 4d.5b Build ID:
+0cd24fdb32b1d6563d86b713841e5370880d1c9c
+
+Expected repository state before the documentation-repair commit:
+HEAD / origin = bd19c4e4adcde9e37df262027eefac6d02b7ac57
+working tree  = clean
+Windows diff  = empty
 ```
 
-Accepted Stage 4d.2 runtime evidence archive SHA256:
+The Stage 4d.5b controlled-negative postmortem evidence archive is:
 
 ```text
-5afabb231cb198ffe00fc70c34f7b14725caa873d3596751b435598348920b21
+SHA256:
+582fadfa947eeae62b874c1d0bf1fb3a44ea1c568309fa74087f99aa72ed0add
 ```
 
 Current isolated populated-world baseline remains:
@@ -77,14 +83,17 @@ Normal isolated mod SHA256:
 56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
 ```
 
-Current production continuity reference during the accepted late-4c / 4d runs:
+Current production continuity reference:
 
 ```text
 PalServer PID:
-82
+83
 
 Container StartedAt:
-2026-08-06T18:30:02.767711895Z
+2026-08-08T18:30:02.661576192Z
+
+RestartCount:
+0
 ```
 
 ### Mature planner invariant
@@ -127,61 +136,83 @@ on every PalServer run. It must not be frozen across restarts.
 
 ### What is currently proven
 
-1. Native NullPrism loading and lifecycle operation work on the Linux
-   dedicated server.
-2. Dedicated-server role resolution occurs on the Unreal game thread.
-3. Populated-world camp, guild, storage, chest, and same-guild foreign-camp
+1. Native NullPrism loading and lifecycle operation work on the Linux dedicated
+   server. The native mod is a `.so`, exports `start_mod` / `uninstall_mod`, and
+   has repeatedly executed inside native Linux PalServer processes.
+2. The Linux port has already executed one real reflected call to the same
+   server-side registration function used by the upstream Windows implementation:
+   `PalBaseCampModuleItemStorage.OnAvailableConcreteModel_ServerInternal(chest)`.
+   The call completed without a crash and the isolated environment restored.
+3. Dedicated-server role resolution occurs on the Unreal game thread.
+4. Populated-world camp, guild, storage, chest, and same-guild foreign-camp
    planning are deterministic.
-4. The complete planner contains 157 associated chests, 20 storages, and 285
+5. The complete planner contains 157 associated chests, 20 storages, and 285
    deduplicated foreign-camp registration pairs across seven active guilds.
-5. A physical chest exposes an exact
-   `UPalMapObjectItemContainerModule*` through `GetItemContainerModule`.
-6. That module exposes the chest's exact nonzero 16-byte `PalContainerId`
-   through `GetContainerId`.
-7. `PalItemContainerManager.GetContainer(PalContainerId)` and
+6. A normal physical chest exposes an exact `UPalMapObjectItemContainerModule*`
+   through `GetItemContainerModule`.
+7. That normal-chest module exposes the chest's exact nonzero 16-byte
+   `PalContainerId` through `GetContainerId`.
+8. `PalItemContainerManager.GetContainer(PalContainerId)` and
    `TryGetContainer(PalContainerId)` resolve the selected physical chest to an
    already-existing nonnull `PalItemContainer`.
-8. `GetGroupIdByItemContainerId(object, PalContainerId)` is an independent
-   guild-membership surface.
-9. The exact membership query returns the zero Guid for the selected known
-   unregistered physical chest and the selected guild Guid for a known
-   registered selected-guild storage container.
-10. The zero Guid is therefore an absence sentinel only. It must not be used as
-    a semantic guild ID.
-11. Container existence and guild membership are separate manager layers.
-    The missing operation is guild association, not container creation.
-12. `GetItemContainerAccess` and `GetItemChestContainerAccess` both return an
+9. `GetGroupIdByItemContainerId(object, PalContainerId)` is an independent
+   guild-membership observation surface.
+10. The membership query returns the zero Guid for the selected known
+    unregistered physical chest and the selected guild Guid for a known
+    registered selected-guild storage container.
+11. The zero Guid is therefore an absence sentinel for that manager-membership
+    layer. It must not be used as a semantic guild ID.
+12. Container existence and manager guild membership are separate layers.
+    **This does not prove that changing manager guild membership is required for
+    Integrated Storage's upstream server-side behaviour.**
+13. `GetItemContainerAccess` and `GetItemChestContainerAccess` both return an
     exact 16-byte `PalMapObjectItemContainerAccessInterface`.
-13. The two access getters return the same coherent nonnull backing
+14. The two access getters return the same coherent nonnull backing
     UObject/interface pair. The backing UObject is not the physical chest.
-14. The exact ready-callback argument can be assembled by copying the
-    game-returned 16-byte interface value verbatim.
-15. `OnAvailableConcreteModel_ServerInternal(chest)` does not create guild
+15. Stage 4d.2 identified that backing UObject as exact native
+    `PalMapObjectItemContainerModule`, with direct native superclass
+    `PalMapObjectConcreteModelModuleBase`.
+16. `OnAvailableConcreteModel_ServerInternal(chest)` does not, by itself,
+    transition the selected chest from zero to nonzero
+    `GetGroupIdByItemContainerId` membership. This is a narrow membership result,
+    not proof that the upstream registration call has no routing or availability
+    effect.
+17. `OnReadyItemContainerGuildChest(interface)` does not create the observed
+    manager membership by itself.
+18. `OnUpdateItemContainerModule(module*)` does not create the observed manager
     membership by itself.
-16. `OnReadyItemContainerGuildChest(interface)` does not create guild
-    membership by itself.
-17. `OnUpdateItemContainerModule(module*)` does not create guild membership by
-    itself.
-18. `OnUpdateItemContainer(PalItemContainer*)` does not create guild membership
-    by itself.
-19. Stage 4d.0 found none of twelve binary-derived lifecycle names on the
+19. `OnUpdateItemContainer(PalItemContainer*)` does not create the observed
+    manager membership by itself.
+20. Stage 4d.0 found none of twelve binary-derived lifecycle names on the
     physical chest, target storage, item-container module, resolved
     `PalItemContainer`, or `PalItemContainerManager`.
-20. Stage 4d.1 found none of those twelve names on the coherent backing UObject
+21. Stage 4d.1 found none of those twelve names on the coherent backing UObject
     returned by `GetItemChestContainerAccess`.
-21. That backing UObject matched none of the four originally predicted
-    map-object model classes.
-22. Stage 4d.2 identified the backing UObject as the exact native
-    `PalMapObjectItemContainerModule` class, with direct native superclass
-    `PalMapObjectConcreteModelModuleBase`.
-23. All 2,005 native Palworld class candidates were queried read-only;
-    2,003 resolved, with exactly one exact-class match and exactly one
-    direct-superclass match.
-24. The access-owner class and object both reported process-local FName
-    comparison index `292821`; the direct superclass reported `287367`.
-25. Accepted isolated runtime experiments complete the 180-second stability
-    window, restore the isolated mod/save exactly, and leave production
-    unchanged.
+22. Stage 4d.3's read-only source/offline-binary survey identified guild-storage
+    candidate machinery but did not establish runtime ownership or behaviour.
+23. Stage 4d.4's offline ELF symbol-ownership route is rejected/incomplete: the
+    PalServer ELF is stripped for the relevant methods and the harness later hit
+    the known host-without-Python problem. Its zero method counts are not absence
+    proof.
+24. Stage 4d.4r resolved five exact reflected owners at runtime without invoking
+    any candidate function:
+    - `PalMapObjectGuildChestModel:OnUpdateItemContainerInGuildItemStorage`
+    - `PalMapObjectItemContainerModule:GetContainerId`
+    - `PalBaseCampModuleItemStorage:OnReadyItemContainerGuildChest`
+    - `PalItemContainerManager:GetGroupIdByItemContainerId`
+    - `PalMapObjectItemContainerAccessInterface:GetItemContainer_ItemContainerAccessInterface`
+25. Stage 4d.5 proved the sole object input of
+    `PalMapObjectGuildChestModel:OnUpdateItemContainerInGuildItemStorage` is exact
+    `PalGuildItemStorage*`.
+26. Stage 4d.5/4d.5b discovered 13 exact live
+    `PalMapObjectGuildChestModel` objects. All 13 resolve
+    `GetItemContainerModule` with the expected reflected layout, but all 13
+    return a null module pointer. The normal chest
+    `GetItemContainerModule -> GetContainerId` path therefore does not apply to
+    live `PalMapObjectGuildChestModel` objects.
+27. Stage 4d.5b produced zero model exceptions, zero candidate update/lifecycle
+    calls, zero runtime name conversion, zero crash/fatal markers, zero new
+    crash directories, exact isolated restoration, and unchanged production.
 
 ### Exact reflected layouts now accepted
 
@@ -189,8 +220,11 @@ on every PalServer run. It must not be frozen across restarts.
 GetItemContainerModule
 ParmsSize=8
 return: offset 0, size 8
-exact type: PalMapObjectItemContainerModule*
+reflected type: PalMapObjectItemContainerModule*
 ```
+
+For a normal physical chest the return is nonnull. For the 13 observed live
+`PalMapObjectGuildChestModel` instances in Stage 4d.5b the return is null.
 
 ```text
 PalMapObjectItemContainerModule.GetContainerId
@@ -221,9 +255,15 @@ Guid return: offset 24, size 16
 ```
 
 ```text
-OnReadyItemContainerGuildChest
+PalBaseCampModuleItemStorage.OnReadyItemContainerGuildChest
 ParmsSize=16
 input: exact PalMapObjectItemContainerAccessInterface
+```
+
+```text
+PalMapObjectGuildChestModel.OnUpdateItemContainerInGuildItemStorage
+ParmsSize=8
+input: exact PalGuildItemStorage*
 ```
 
 ```text
@@ -265,28 +305,62 @@ The following routes must not be casually reopened:
    Sixteen exact property names were exhausted with negative results.
 5. **Fixed selected-chest accessor guesses.**
    Thirty exact accessor names were exhausted with negative results.
-6. **Standalone `OnAvailableConcreteModel_ServerInternal(chest)`.**
-   Controlled negative; do not repeat blindly.
+6. **Standalone `OnAvailableConcreteModel_ServerInternal(chest)` as a manager-
+   membership transition test.** It produced no zero-to-guild membership
+   transition. Do not reinterpret that narrow negative as proof that upstream
+   registration has no Integrated Storage effect.
 7. **Standalone `OnReadyItemContainerGuildChest(interface)`.**
-   Controlled `NO_TRANSITION`; do not repeat standalone.
+   Controlled `NO_TRANSITION` for manager membership; do not repeat standalone.
 8. **Standalone `OnUpdateItemContainerModule(module*)`.**
-   Controlled `NO_TRANSITION`; do not repeat standalone.
+   Controlled `NO_TRANSITION` for manager membership; do not repeat standalone.
 9. **Standalone `OnUpdateItemContainer(PalItemContainer*)`.**
-   Controlled `NO_TRANSITION`; do not repeat standalone.
-10. The historical no-call `QUERY_ASSEMBLY` incompleteness predates the
-    accepted module-to-`PalContainerId` bridge and is not a current blocker.
+   Controlled `NO_TRANSITION` for manager membership; do not repeat standalone.
+10. **Offline `nm`/defined-symbol ownership for the stripped PalServer ELF.**
+    Stage 4d.4 demonstrated that this is not a viable method-ownership route.
+11. The historical no-call `QUERY_ASSEMBLY` incompleteness predates the accepted
+    module-to-`PalContainerId` bridge and is not a current blocker.
+
+### Project-health semantic correction
+
+The engineering record had drifted from the upstream behavioural question into
+an unproven stronger requirement:
+
+```text
+upstream-equivalent Integrated Storage behaviour
+    became treated as if it necessarily required
+PalContainerId -> GuildId manager-membership transition
+```
+
+That equivalence has **not** been proven.
+
+The upstream dedicated-server path recorded in this runsheet registers each
+foreign same-guild chest by calling:
+
+```text
+storage->OnAvailableConcreteModel_ServerInternal(chest)
+```
+
+The Linux port has already executed that call safely once. The later membership
+oracle is valuable evidence about one manager layer, but it is not automatically
+the acceptance definition for Integrated Storage.
+
+Before any more registration/lifecycle archaeology, the project must return to
+upstream server-side semantic parity and define the actual functional effect that
+needs to be reproduced.
 
 ### What is not yet proven
 
-1. The exact operation that creates `PalContainerId -> GuildId` membership.
-2. Whether the access-interface backing UObject is the exact same module
-   instance returned by `GetItemContainerModule`.
-3. How a built guild chest's item-container module and membership differ from
-   an ordinary unregistered chest and a known registered storage control.
-4. Whether association requires a multi-step setup/registration/lifecycle
-   sequence.
-5. Removal/unregistration behaviour.
-6. Full 285-pair registration and reconciliation.
+1. Whether the already-ported upstream
+   `OnAvailableConcreteModel_ServerInternal(chest)` call produces the actual
+   server-side routing/availability effect needed by Integrated Storage even
+   though `GetGroupIdByItemContainerId` remains zero.
+2. Whether `PalContainerId -> GuildId` manager membership is required at all for
+   upstream-equivalent Integrated Storage behaviour.
+3. The exact functional server-side effect of one foreign-camp registration
+   pair: e.g. which material/container query begins including the foreign chest.
+4. Exact-pair idempotency measured against that functional effect.
+5. Full 285-pair registration and reconciliation measured against that effect.
+6. Removal/unregistration behaviour.
 7. Persistence or reconstruction behaviour across restart.
 8. Server-authoritative integrated material routing/consumption.
 9. Player-visible integrated-storage behaviour on Linux.
@@ -294,20 +368,26 @@ The following routes must not be casually reopened:
 ### Next stage
 
 ```text
-Stage 4d.3 — guild-storage anchor comparison
+Stage 4d.6 — server-side upstream parity audit
 ```
 
-Stage 4d.3 remains read-only. It should compare an ordinary unregistered
-physical chest, a built guild chest, and a known registered storage control
-through the already accepted module / `PalContainerId` / manager-membership /
-access-interface path.
+Stage 4d.6 is static/read-only. It must compare the dedicated-server path in
+`src/dllmain.cpp` against `src/linux/main.cpp` and answer, before another runtime
+mutation:
 
-The first new question is whether the object backing
-`GetItemChestContainerAccess` is pointer-identical to the exact
-`PalMapObjectItemContainerModule` returned by `GetItemContainerModule`.
-The comparison must not use manager-map traversal, broad reflected graphs,
-bulk `PalItemContainer` processing, lifecycle candidate calls, or production
-mutation.
+1. What exact upstream server-side discovery, filtering, registration, guard,
+   and reconciliation operations exist?
+2. Which of those operations are already reproduced in the Linux source?
+3. Which upstream server-side dependencies were intentionally client-only and
+   therefore correctly omitted?
+4. Does the upstream server path ever require or directly create the
+   `PalContainerId -> GuildId` membership transition that later experiments used
+   as an oracle?
+5. What direct functional observable represents successful Integrated Storage
+   behaviour on a dedicated server?
+
+No new reflected lifecycle candidate is to be invoked until this parity audit
+has defined a concrete missing operation or a functional acceptance test.
 
 ## 2. Repository and branch strategy
 
@@ -871,6 +951,9 @@ call.
 - `ab94c5374ce9ecc04839b5b7ace45c052a8bfb9b` — docs: record ordinal identity survey
 - `f344f608ba91b7b6cd9f0b591b8cdb46ee7444c1` — feat(linux): map ordinal item identity
 - `586d6d76840aba614982560f5ede74b9774de5c6` — feat(linux): validate semantic fingerprint repeatability
+- `be86a58db4df15a756affbc4d3cab9cbb039e939` — feat(linux): identify item-container access owner
+- `8c072462bb16740c6449ff0ab43072a6a2c57471` — Stage 4d.4r: map guild storage reflection owners
+- `bd19c4e4adcde9e37df262027eefac6d02b7ac57` — Stage 4d.5b: characterize GuildChest null module route
 
 ## 9. Stage-by-stage runsheet
 
@@ -1819,6 +1902,10 @@ to prevent recurrence.
 - `grep | head | tee` under `set -o pipefail` produced SIGPIPE status 141
 - Evidence report generation must not invalidate an otherwise accepted
   runtime test
+- `pgrep -f 'PalServer-Linux-Shipping'` can match the shell command performing
+  the lookup; use the self-excluding pattern `[P]alServer-Linux-Shipping`
+- Host-level diagnostic collectors must not assume `python3`; Python belongs in
+  the development container unless host availability was explicitly checked
 
 ### Runtime harness issues
 
@@ -1842,6 +1929,12 @@ to prevent recurrence.
   C++ source split it across two adjacent literals
 - The first Stage 4c.3 audit searched for the complete runtime arm
   filename in source even though source only stored the suffix
+- Stage 4d.5b checkpoint v1 incorrectly required exactly one textual
+  `RESULT=INCOMPLETE` exit even though the probe legitimately had seven; the
+  wrapper failed before `git add`
+- Later build packages retained stale Stage 4d.2 `BUILD-PROVENANCE.txt` scope
+  prose after the source had advanced; build provenance text must be audited as
+  part of the next accepted checkpoint
 
 ### Safety lessons
 
@@ -1855,6 +1948,13 @@ to prevent recurrence.
 - Production must be checked independently before claiming it remained
   unchanged
 - Docker `Running` can survive a child process boot loop
+- A manager-membership oracle is not automatically the semantic definition of
+  Integrated Storage success. `GetGroupIdByItemContainerId` proves one manager
+  layer; it does not prove upstream registration is ineffective when unchanged.
+- An accepted stage checkpoint must update the engineering runsheet in the same
+  commit as the accepted code/build changes. Stage 4d.4r broke this discipline and Stage 4d.5b repeated the mistake,
+  leaving the runsheet at Stage 4d.2 while source advanced through both commits.
+  No further accepted push may repeat it.
 
 ---
 
@@ -1885,120 +1985,134 @@ The following rules remain mandatory:
 - Keep normal staged mutation candidates unarmed by default
 - Snapshot and restore isolated mod and save around every mutation test
 - Verify production PID and container start time after every isolated test
+- Use `pgrep -f '[P]alServer-Linux-Shipping'` for child-PID detection
+- Do not claim upstream registration failed solely because
+  `GetGroupIdByItemContainerId` remains zero
+- Do not perform further guild-registration archaeology until the server-side
+  upstream parity audit defines the actual required semantic effect
+- Do not commit/push an accepted stage unless `docs/linux-port-status.md` is
+  updated, its structure audit passes, and the current position / sole next
+  action advance in the same checkpoint
+- Do not accept stale `BUILD-PROVENANCE.txt` scope prose in a checkpoint package
 
 ---
 
 ## 12. Stage 4c.4 plan — effect observability
 
-### Objective
+### Historical objective
 
-Determine whether the selected target storage exposes a readable state
-showing that the selected foreign chest is registered.
+Stage 4c.4 originally attempted to find a readable state proving that a selected
+foreign chest had been registered into a target storage.
 
-### Required survey
+The investigation eventually established a reliable
+`GetGroupIdByItemContainerId` membership oracle, but later work treated a
+zero-to-guild transition on that oracle as if it were necessarily the upstream
+Integrated Storage success condition.
 
-Inspect:
+### 2026-08-09 scope correction
 
-- Upstream registration-related fields and helpers
-- NullPrism property APIs
-- `FArrayProperty`
-- `FSetProperty`
-- `FMapProperty`
-- `FObjectProperty`
-- Script array/set/map helpers
-- Generated or SDK storage types
-- PalServer UTF-16 and ASCII strings
-- Possible read-only query functions
-- Possible removal or refresh functions
+That stronger requirement is not established by the upstream server path.
 
-### Candidate observation types
-
-Preferred order:
-
-1. Reflected query function returning membership
-2. Reflected array or set of registered concrete models
-3. Reflected map keyed by concrete model
-4. Read-only count plus exact pointer scan
-5. Carefully validated raw container read only when reflection provides
-   the container metadata but no helper API
-
-### Required validation
-
-Before a second mutation call:
-
-- Identify exact storage property or query
-- Validate property type
-- Validate element type
-- Validate container bounds
-- Read selected chest membership before registration
-- Call the one-shot registration
-- Read selected chest membership after registration
-- Demonstrate a specific before/after change
-- Repeat after later scans to confirm retention
-
-### Prohibited during Stage 4c.4
-
-- Full 285-pair mutation
-- Periodic reconcile
-- Item transfer tests
-- Production deployment
-- Guessing a raw property offset
-- Writing directly into the observed collection
-- Calling a second registration until the first effect is observable
-
-### Acceptance target
-
-A future Stage 4c.4 acceptance should report something equivalent to:
+The recorded upstream server implementation performs foreign-camp registration
+through:
 
 ```text
-Selected chest present before call:
-0
-
-Registration call:
-1
-
-Selected chest present immediately after call:
-1
-
-Selected chest present after stability window:
-1
-
-Crashes:
-0
-
-Thread violations:
-0
+PalBaseCampModuleItemStorage.OnAvailableConcreteModel_ServerInternal(chest)
 ```
 
-Only after this result should exact-pair idempotency be tested.
+It does not, in the source evidence currently recorded by this runsheet,
+explicitly require a `PalContainerId -> GuildId` manager-membership transition.
+
+Therefore the following distinction is mandatory:
+
+```text
+membership transition absent
+!=
+upstream Integrated Storage effect absent
+```
+
+Stage 4c.4j had already warned that an unchanged aggregate fingerprint did not
+prove registration had no effect; routing, visibility, ownership, or another
+state surface could carry that effect. That warning now governs the project.
+
+### Revised acceptance problem
+
+Before another registration mutation, first define the actual server-side
+behaviour that upstream relies on. A valid observable must be tied to that
+behaviour, such as a server-side material/container query whose result changes
+when a foreign same-guild chest is registered.
+
+A future mutation test must then measure:
+
+1. the functional observable before registration;
+2. one exact upstream-equivalent registration call;
+3. the same observable immediately after registration;
+4. the observable after a stability interval;
+5. server stability, thread validity, isolated restoration, and production
+   continuity.
+
+The existing membership query may remain a secondary diagnostic, but it is not
+the primary acceptance condition unless the upstream parity audit proves that it
+is semantically required.
+
+### Prohibited until parity is re-established
+
+- Full 285-pair mutation
+- Duplicate-call/idempotency mutation
+- Periodic reconciliation
+- Production deployment
+- New speculative lifecycle callback invocation
+- Direct manager-map inspection
+- Broad reflected graph traversal
+- Treating unchanged manager membership as proof of no Integrated Storage effect
 
 ---
 
 ## 13. Later stages
 
-### Stage 4c.5 — exact-pair idempotency
+### Stage 4d.6 — server-side upstream parity audit
 
-- Observe membership before first call
-- Call selected pair once
-- Observe membership
+- Diff the dedicated-server logic in `src/dllmain.cpp` against `src/linux/main.cpp`
+- Enumerate upstream server discovery, filtering, registration, reentrancy, and
+  reconciliation behaviour
+- Classify omitted code as client-only, Windows-only infrastructure, or genuinely
+  missing server-side behaviour
+- Determine whether upstream ever depends on manager guild membership
+- Define one direct functional server-side acceptance observable
+- No runtime mutation
+
+### Functional single-pair acceptance
+
+- Measure the parity-audit-selected functional observable
+- Call one exact same-guild foreign-camp pair through the upstream-equivalent
+  server registration function
+- Re-measure the same functional observable
+- Retain manager membership only as secondary telemetry unless proven required
+- Confirm no duplicate/side-effect assumptions yet
+- Restore isolated state
+
+### Exact-pair idempotency
+
+- Observe the functional effect before first call
+- Call the selected pair once
+- Observe the effect
 - Call the same pair a second time
-- Observe whether count and membership remain stable
-- Confirm no duplicate entry
+- Confirm the functional result is stable and no duplicate state is created
 - Confirm no crash
 - Restore isolated save
 
-### Stage 4d — complete planned registration
+### Complete planned registration
 
 - Explicit feature gate
 - Execute all 285 deduplicated pairs
 - Reentrancy guard
 - Per-pair success/failure diagnostics
 - No periodic reconciliation initially
-- Observe resulting storage membership
+- Observe the validated functional storage effect
 - Long populated-world stability window
 - Full restoration
 
-### Stage 4e — reconciliation
+### Reconciliation
 
 - Periodic rebuild
 - Idempotent repeat registration
@@ -2009,15 +2123,15 @@ Only after this result should exact-pair idempotency be tested.
 - Stale pointer handling
 - Removal-path investigation
 
-### Stage 4f — restart and persistence
+### Restart and persistence
 
 - Server restart
 - World reload
 - Rebuild registration state
-- Confirm storage behaviour after restart
+- Confirm validated storage behaviour after restart
 - Determine whether registration is runtime-only or serialised
 
-### Stage 4g — user-facing configuration
+### User-facing configuration
 
 - Enable/disable
 - Reconcile interval
@@ -2029,7 +2143,8 @@ Only after this result should exact-pair idempotency be tested.
 
 The first usable release requires:
 
-- Observable registration effect
+- Upstream server-side parity explicitly audited
+- Observable functional registration effect
 - Exact-pair idempotency
 - Full-plan execution
 - Reconciliation
@@ -2057,9 +2172,13 @@ Accepted result:
 SEMANTIC_OBSERVATION RESULT=UNCHANGED
 ```
 
+The Stage 4c.4j interpretation remains important: an unchanged aggregate
+fingerprint did not prove the registration call had no effect outside the
+observed aggregate slots.
+
 ### Later accepted evidence identities
 
-The late-Stage-4c experiments are identified by evidence archive SHA256:
+Late Stage 4c evidence archive SHA256 values:
 
 ```text
 Stage 4c.4u:
@@ -2075,17 +2194,35 @@ Stage 4c.4x:
 1d048eb2eac6509551c054881eebc1756e77fbf209b7db0b872436dce9acdad7
 ```
 
-Read-only Stage 4d discovery evidence archives:
+Read-only / diagnostic Stage 4d evidence:
 
 ```text
-Stage 4d.0:
+Stage 4d.0 accepted runtime evidence:
 6f274fb62cf9be7626c6d17843619205308b3a9532ad3113a89a701042f4311a
 
-Stage 4d.1:
+Stage 4d.1 accepted runtime evidence:
 5e5fc3901e33e64dabc7ced580ea3bd6a150dc4794f5f1eb91669e18c0a93477
 
-Stage 4d.2:
+Stage 4d.2 accepted runtime evidence:
 5afabb231cb198ffe00fc70c34f7b14725caa873d3596751b435598348920b21
+
+Stage 4d.3 accepted read-only source/offline survey evidence:
+49fd35437f15438ea3cdaece156fd4e560106db777c62c5926ac13d64a571524
+
+Stage 4d.4 rejected/incomplete offline ELF ownership evidence:
+4f3b1521f8c2a963c0852983d7b6f8d6868b17f40e9490acd1ed1898cc1d7961
+
+Stage 4d.4r runtime postmortem evidence:
+c18b6f5e9930ab34137f6ab02d2123c00f56e33026de3a7e5d1da39b75f8fd38
+
+Stage 4d.4r accepted checkpoint evidence:
+6a0e661bf0155a640fa88fb64bdedd3ad16c7dffeefc88f0599dabc17c266537
+
+Stage 4d.5a source-topology extraction evidence:
+a021a8a8f42585306980a92147f73190ff59efe19df0491a1108ffc0921af331
+
+Stage 4d.5b controlled-negative postmortem evidence:
+582fadfa947eeae62b874c1d0bf1fb3a44ea1c568309fa74087f99aa72ed0add
 ```
 
 The normal isolated state remains:
@@ -2101,14 +2238,17 @@ Player saves:
 19
 ```
 
-The current production continuity reference for the late accepted runs is:
+Current production continuity reference:
 
 ```text
 PID:
-82
+83
 
 StartedAt:
-2026-08-06T18:30:02.767711895Z
+2026-08-08T18:30:02.661576192Z
+
+RestartCount:
+0
 ```
 
 Earlier accepted evidence paths remain recorded in their chronological stage
@@ -4511,52 +4651,398 @@ Evidence archive SHA256:
 
 ---
 
-## 45. Immediate next action
+## 45. Stage 4d.3 — guild-storage anchor source survey
 
-Run Stage 4d.3:
-
-```text
-guild-storage anchor comparison
-```
-
-Required read-only comparison:
-
-1. ordinary selected unregistered physical chest;
-2. one built guild chest;
-3. one known registered storage control.
-
-For each object, capture the already accepted semantic chain:
+### Classification
 
 ```text
-physical/model object
-  -> GetItemContainerModule
-  -> exact module pointer
-  -> GetContainerId
-  -> PalContainerId
-  -> manager GetContainer
-  -> GetGroupIdByItemContainerId
-  -> GetItemChestContainerAccess where supported
-  -> access-owner pointer and exact native class
+READ_ONLY / STATIC-OFFLINE SURVEY — ACCEPTED
 ```
 
-The first explicit test must compare:
+Stage 4d.3 performed no source mutation, build, isolated server start,
+`ProcessEvent`, save mutation, or production deployment.
+
+It surveyed the accepted Stage 4d.2 source plus the PalServer binary identity and
+found relevant native classes / strings including:
 
 ```text
-GetItemContainerModule module pointer
-vs
-GetItemChestContainerAccess backing UObject pointer
+UPalGuildItemStorage
+UPalMapObjectGuildChestModel
+UPalMapObjectItemContainerModule
+UPalMapObjectItemContainerAccessInterface
+OnUpdateItemContainerInGuildItemStorage
+GetItemContainer_ItemContainerAccessInterface
+GetTargetContainerId
+bIsGuildChestModule
+bIsGuildChestContainer
+OnReadyItemContainerGuildChest
+GetItemChestContainerAccess
 ```
 
-No mutation is allowed.
+These were candidate machinery only. The stage did not establish reflected
+ownership, runtime availability, or behaviour.
 
-Do not reopen:
+Evidence archive SHA256:
 
-- direct `ItemContainerMap_InServer` inspection;
-- broad graph / `TFieldRange` traversal;
-- bulk `PalItemContainer` processing;
-- the exhausted fixed property/accessor guesses;
-- standalone target-storage lifecycle callbacks.
+```text
+49fd35437f15438ea3cdaece156fd4e560106db777c62c5926ac13d64a571524
+```
 
-The purpose is to establish whether the built guild chest exposes the same
-module/access-owner architecture but with a native nonzero guild membership,
-which would make it a canonical guild-storage association anchor.
+---
+
+## 46. Stage 4d.4 — offline ELF symbol ownership attempt
+
+### Classification
+
+```text
+REJECTED / INCOMPLETE — DO NOT RERUN AS AN OWNERSHIP METHOD
+```
+
+The live PalServer ELF was stripped for the relevant method-symbol purpose.
+Defined-symbol inspection produced no candidate method ownership, while dynamic
+symbols exposed only relevant vtables.
+
+The wrapper later failed because it assumed host `python3`, which is not
+installed.
+
+The zero method counts are therefore not absence proof. The route is retained as
+a dead end, not as a semantic result.
+
+Evidence archive SHA256:
+
+```text
+4f3b1521f8c2a963c0852983d7b6f8d6868b17f40e9490acd1ed1898cc1d7961
+```
+
+---
+
+## 47. Stage 4d.4r — exact runtime reflection-owner matrix
+
+### Classification
+
+```text
+READ_ONLY RUNTIME — ACCEPTED / COMMITTED / PUSHED
+```
+
+Accepted checkpoint:
+
+```text
+Commit:
+8c072462bb16740c6449ff0ab43072a6a2c57471
+
+Commit message:
+Stage 4d.4r: map guild storage reflection owners
+
+Source SHA256:
+6008693854db00309c2e4b5f4a1e24ae517fb6007a0985b16356da2014714ff6
+
+Artifact SHA256:
+def8cc8284bfe1365b154545b40dc3eab31c7c981c733472788ddeda09471280
+
+Build ID:
+a0ca0efed27d77c629554284b334293a525d8b33
+```
+
+The probe queried ten exact class owners against fourteen exact function names:
+
+```text
+class/function pairs=140
+exact path lookups=280
+runtime candidate calls=0
+ProcessEvent calls in the new probe=0
+```
+
+Five exact reflected owners resolved:
+
+```text
+PalMapObjectGuildChestModel:OnUpdateItemContainerInGuildItemStorage
+PalMapObjectItemContainerModule:GetContainerId
+PalBaseCampModuleItemStorage:OnReadyItemContainerGuildChest
+PalItemContainerManager:GetGroupIdByItemContainerId
+PalMapObjectItemContainerAccessInterface:GetItemContainer_ItemContainerAccessInterface
+```
+
+The first runtime wrapper falsely flagged production PID continuity because
+`pgrep -f 'PalServer-Linux-Shipping'` could match its own shell command. A
+postmortem established that production did not restart and the runtime result was
+accepted. Future harnesses use `[P]alServer-Linux-Shipping`.
+
+Postmortem evidence SHA256:
+
+```text
+c18b6f5e9930ab34137f6ab02d2123c00f56e33026de3a7e5d1da39b75f8fd38
+```
+
+Checkpoint evidence SHA256:
+
+```text
+6a0e661bf0155a640fa88fb64bdedd3ad16c7dffeefc88f0599dabc17c266537
+```
+
+### Documentation defect
+
+This accepted code checkpoint did not advance this engineering runsheet. That
+broke the established checkpoint discipline and is the reason this repair is
+required.
+
+The staged build provenance prose also remained stale at Stage 4d.2 even though
+the source/artifact identity was Stage 4d.4r.
+
+---
+
+## 48. Stage 4d.5 — live GuildChestModel anchor comparison
+
+### Classification
+
+```text
+READ_ONLY RUNTIME — CONTROLLED INCOMPLETE / UNCOMMITTED
+```
+
+Candidate identity:
+
+```text
+Base HEAD:
+8c072462bb16740c6449ff0ab43072a6a2c57471
+
+Source SHA256:
+0723e9fe9baaa9f8fa8aadf007df382ac5237476db27f9a303805a76e00df6a1
+
+Artifact SHA256:
+924c12b637e87d782b99166661c6b2539c307be6577a9d2d50256df20427ec5b
+
+Build ID:
+16ef33212c1522206a71162625244cd0c9d63e65
+```
+
+Runtime discovered:
+
+```text
+PalMapObjectGuildChestModel objects=13
+nonnull=13
+exact class=13
+model exceptions=0
+```
+
+`OnUpdateItemContainerInGuildItemStorage` resolved with its exact one-object
+input layout, and the input class was proven to be:
+
+```text
+PalGuildItemStorage*
+```
+
+All 13 GuildChestModels resolved `GetItemContainerModule` with the expected
+reflected getter layout, but none returned an exact normal item-container module.
+The first probe intentionally stopped there and returned `INCOMPLETE`.
+
+This stage was not committed.
+
+---
+
+## 49. Stage 4d.5b — GuildChestModel null-module controlled negative
+
+### Classification
+
+```text
+READ_ONLY RUNTIME — CONTROLLED NEGATIVE ACCEPTED / COMMITTED / PUSHED
+```
+
+Candidate identity:
+
+```text
+Base HEAD:
+8c072462bb16740c6449ff0ab43072a6a2c57471
+
+Source SHA256:
+7a63fd68448290aa9a3b6e78099e3948618c97198254ef9ff09860773b256092
+
+Artifact SHA256:
+f6125e3247d8074045e51d387bf2f3ae260db7d68c25611186a482ac6ab5bd8b
+
+Build ID:
+0cd24fdb32b1d6563d86b713841e5370880d1c9c
+```
+
+The subtype follow-up disproved the Stage 4d.5 hypothesis that live
+GuildChestModels were returning a subclass of the normal item-container module.
+
+Postmortem result:
+
+```text
+objects=13
+nonnull=13
+exact_class=13
+GetItemContainerModule function=13
+GetItemContainerModule layout=13
+returned module nonnull=0
+module_is_a PalMapObjectItemContainerModule=0
+complete normal container chains=0
+model exceptions=0
+candidate callback calls=0
+runtime name conversion=0
+crash/fatal lines=0
+new crash directories=0
+isolated restored=1
+production unchanged=1
+```
+
+The class/superclass comparison indexes remained `-1/-1`; the probe source only
+assigns those indexes when the returned module pointer is nonnull. Together with
+the zero downstream getter activity, the accepted interpretation is:
+
+```text
+13/13 live PalMapObjectGuildChestModel
+    GetItemContainerModule()
+        -> nullptr
+```
+
+Therefore the ordinary physical-chest
+`GetItemContainerModule -> GetContainerId -> manager membership` chain is not a
+GuildChestModel architecture.
+
+Postmortem evidence archive SHA256:
+
+```text
+582fadfa947eeae62b874c1d0bf1fb3a44ea1c568309fa74087f99aa72ed0add
+```
+
+Accepted checkpoint:
+
+```text
+Commit:
+bd19c4e4adcde9e37df262027eefac6d02b7ac57
+
+Parent:
+8c072462bb16740c6449ff0ab43072a6a2c57471
+
+Commit message:
+Stage 4d.5b: characterize GuildChest null module route
+
+Files changed:
+src/linux/main.cpp
+```
+
+### Documentation defect
+
+The Stage 4d.5b controlled-negative checkpoint was in fact committed and pushed.
+Like Stage 4d.4r before it, that checkpoint changed only `src/linux/main.cpp`
+and again failed to advance `docs/linux-port-status.md`.
+
+The repository source history is coherent; the engineering runsheet is the stale
+component. This documentation-repair checkpoint exists to bring the runsheet
+forward to the already-pushed `bd19c4e4...` state before Stage 4d.6 begins.
+
+---
+
+## 50. Project health audit — semantic scope correction
+
+### Why this audit was required
+
+The project had accumulated substantial runtime archaeology after the Linux port
+had already demonstrated that:
+
+1. the native `.so` loads and executes through NullPrism on Linux;
+2. the populated world can be discovered and planned correctly; and
+3. the Linux implementation can invoke the same reflected server registration
+   function recorded in the upstream Windows implementation.
+
+The concern is therefore not presently "how do we replace the Windows DLL with
+a Linux `.so`?" That native entry path is already operational.
+
+### Identified engineering risk
+
+The later investigation established a strong and useful membership oracle:
+
+```text
+PalItemContainerManager.GetGroupIdByItemContainerId
+```
+
+The engineering process then drifted into treating this condition as required:
+
+```text
+foreign chest must transition
+zero Guid -> selected guild Guid
+```
+
+That requirement is stronger than the upstream server-side evidence currently
+recorded by this runsheet.
+
+The upstream registration path recorded in Stage 4c.1 is:
+
+```cpp
+g_srvInjecting = true;
+
+for each guild storage:
+    for each same-guild chest from another camp:
+        storage->OnAvailableConcreteModel_ServerInternal(chest);
+
+g_srvInjecting = false;
+```
+
+No recorded upstream evidence says this call must mutate
+`GetGroupIdByItemContainerId` membership.
+
+Stage 4c.4j itself explicitly warned that an unchanged observed aggregate did
+not prove registration had no effect. Stage 4c.4o later proved only that the
+standalone upstream registration call did not change the selected manager
+membership oracle.
+
+The corrected interpretation is:
+
+```text
+Stage 4c.4o proves:
+OnAvailableConcreteModel_ServerInternal(chest)
+    does not independently create the observed manager-membership transition.
+
+Stage 4c.4o does NOT prove:
+OnAvailableConcreteModel_ServerInternal(chest)
+    fails to provide the routing/availability behaviour Integrated Storage needs.
+```
+
+### Required recovery action
+
+Do not continue hunting for a hidden guild-association primitive until the Linux
+server path has been compared line-by-line with the upstream server path.
+
+The next engineering decision must come from parity, not from another guessed
+runtime callback.
+
+---
+
+## 51. Immediate next action
+
+Run Stage 4d.6:
+
+```text
+server-side upstream parity audit
+```
+
+This is a static/read-only source audit. No PalServer runtime is required.
+
+Required work:
+
+1. Extract the dedicated-server execution path from `src/dllmain.cpp`:
+   - server-role gate;
+   - camp/guild/chest/storage discovery;
+   - same-guild / different-camp filtering;
+   - reentrancy guard;
+   - registration function and argument;
+   - registration cadence / reconciliation;
+   - any server-side data/query path that consumes the registration.
+2. Map each upstream operation to `src/linux/main.cpp` and classify it as:
+   - exact semantic equivalent already implemented;
+   - Linux-specific equivalent;
+   - intentionally omitted client/Windows-only code;
+   - genuinely missing server-side behaviour.
+3. Explicitly search the upstream server path for any dependency on:
+   - `GetGroupIdByItemContainerId`;
+   - `PalContainerId -> GuildId` association;
+   - guild-chest lifecycle callbacks discovered in Stage 4d.4r.
+4. Do not infer that those mechanisms are required if upstream does not use
+   them.
+5. Identify the direct functional server-side observable that proves a foreign
+   chest is contributing to Integrated Storage.
+6. Only then design the next isolated single-pair runtime acceptance around that
+   observable.
+
+No source mutation, registration call, lifecycle callback, full-plan loop, or
+production deployment is part of Stage 4d.6.
