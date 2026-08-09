@@ -133,14 +133,22 @@ cross-DSO/allocator boundary between the mod's `main.so` and the engine's
 `FMallocBinned2`) corrupts the heap, and the *next* unrelated allocation
 after that is where the corruption is detected and the process dies.
 
-`Stage 4D.9c` (in progress, this session) isolates the remaining open
-variable: does the corruption come from the engine's own
-`FName::ToString()` → `FString` allocation, or from `RC::to_string()`'s
-char16_t→`std::string` conversion helper on the mod side? It calls
-`ToString()` on the same pool-sourced FName as 4D.9b but never calls
-`RC::to_string()` on the result. If it still crashes, the bug is inside the
-engine-side call and `ToString()` is a dead end for this port entirely. If
-it does not crash, `RC::to_string()` is the culprit and can be reworked.
+`Stage 4D.9c` closed the remaining open variable: does the corruption come
+from the engine's own `FName::ToString()` → `FString` allocation, or from
+`RC::to_string()`'s char16_t→`std::string` conversion helper on the mod
+side? It called `ToString()` on the same pool-sourced FName as 4D.9b but
+never called `RC::to_string()` (or touched anything about the result
+beyond reading its `.size()`, `length=23`). It **still crashed**, same
+signature, same place. That rules out the mod-side conversion helper
+entirely: **the corruption is inside the engine's own `FName::ToString()`
+call itself**, triggered purely by invoking it from this mod's DSO,
+independent of anything done with the result afterward.
+
+**`FName::ToString()` is therefore a confirmed dead end on this runtime —
+not fixable by changing how the mod consumes its output.** The only
+remaining path to safe name serialization is the offline patternsleuth
+`FNamePool`/`FNameEntry` decoder work (Stage 4d.8h, §8), which reads name
+data directly and never calls `ToString()` at all.
 
 This matches and refines the original (pre-session) Stage 4d.8b finding:
 
@@ -220,15 +228,14 @@ runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/s
 
 ## 8. Immediate next action
 
-1. Land Stage 4D.9c's result (this session, in progress) — confirms whether
-   `ToString()` corruption is engine-side or `RC::to_string()`-side.
-2. If engine-side: `FName::ToString()` and everything downstream of it is a
-   dead end on this runtime. Pursue the offline patternsleuth `FNamePool` +
-   `FNameEntry` decoder path (Stage 4d.8h scope below) as the only route to
-   safe name serialization.
-3. If `RC::to_string()`-side: rework the char16_t→string conversion (e.g.
-   avoid whatever allocation pattern crosses the DSO boundary) and re-test.
-4. Independently of FName serialization: still need a periodic/topology-aware
+Stage 4D.9c confirmed `FName::ToString()` corruption is engine-side, not
+`RC::to_string()`-side (§5). `ToString()` and everything downstream of it
+is a dead end on this runtime.
+
+1. Pursue the offline patternsleuth `FNamePool` + `FNameEntry` decoder path
+   (Stage 4d.8h scope below) as the only remaining route to safe name
+   serialization — it never calls `ToString()`.
+2. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap).
 
 Stage 4d.8h scope (still valid, not yet started): offline PalServer FName
@@ -251,7 +258,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
-| 4D.9c | *(in progress)* ToString() call with no `RC::to_string()` conversion — isolates engine-side vs. mod-side corruption source. |
+| 4D.9c | Accepted diagnostic, conclusive. `ToString()` call with no `RC::to_string()` conversion still crashes identically — corruption is engine-side, not mod-side. `FName::ToString()` confirmed dead end (§5, §8). |
 | 4D.9b | Accepted diagnostic. `ToString()` on a memcpy'd/pool-sourced FName decodes correctly, then crashes shortly after (§5). |
 | 4D.9a | Accepted diagnostic. `ToString()` on a `GetFName()`-sourced FName decodes correctly, then crashes shortly after (§5). |
 | 4d.8g R3 | Accepted static ABI + ELF provenance. Confirmed current PalServer ELF identity and `ps_scan_file_ue4ss` C ABI. |
