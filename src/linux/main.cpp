@@ -182,6 +182,68 @@ namespace
         bool passed{};
     };
 
+
+    using TransportItemNameKey =
+        std::array<std::uint8_t, 8>;
+
+    struct TransportItemNameKeyHash
+    {
+        auto operator()(
+            const TransportItemNameKey& key
+        ) const noexcept -> std::size_t
+        {
+            std::size_t hash =
+                static_cast<std::size_t>(
+                    1469598103934665603ULL
+                );
+
+            for (const auto byte : key)
+            {
+                hash ^=
+                    static_cast<std::size_t>(
+                        byte
+                    );
+
+                hash *=
+                    static_cast<std::size_t>(
+                        1099511628211ULL
+                    );
+            }
+
+            return hash;
+        }
+    };
+
+    auto transport_name_key_to_hex(
+        const TransportItemNameKey& key
+    ) noexcept -> std::array<char, 17>
+    {
+        constexpr char HexDigits[] =
+            "0123456789abcdef";
+
+        std::array<char, 17> result{};
+
+        for (
+            std::size_t index{};
+            index < key.size();
+            ++index
+        )
+        {
+            result[index * 2] =
+                HexDigits[
+                    (key[index] >> 4) & 0x0f
+                ];
+
+            result[index * 2 + 1] =
+                HexDigits[
+                    key[index] & 0x0f
+                ];
+        }
+
+        result[16] = '\0';
+        return result;
+    }
+
     auto mix_plan_value(std::uint64_t value) noexcept
         -> std::uint64_t
     {
@@ -629,6 +691,7 @@ namespace
     std::atomic_bool g_ordinal_identity_layout_reported{false};
     std::atomic_bool g_access_owner_class_identity_reported{false};
     std::atomic_bool g_semantic_repeatability_complete{false};
+    std::atomic_bool g_transport_metadata_reported{false};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -1189,6 +1252,1352 @@ namespace
             true,
             std::memory_order_release
         );
+    }
+
+
+
+    auto run_read_only_transport_metadata_probe(
+        const std::unordered_map<
+            GuildKey,
+            RegistrationPlanGuild,
+            GuildKeyHash
+        >& registration_plan,
+        bool plan_complete,
+        std::uint64_t planned_run
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected_reported{false};
+
+        if (
+            !g_transport_metadata_reported.
+                compare_exchange_strong(
+                    expected_reported,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            auto* player_controller_cdo =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UObject*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR(
+                            "/Script/Pal."
+                            "Default__PalPlayerController"
+                        )
+                    );
+
+            auto describe_rpc =
+                [](
+                    RC::Unreal::UObject* cdo,
+                    const RC::Unreal::TCHAR* name,
+                    const char* label
+                ) -> bool
+                {
+                    auto* function =
+                        cdo != nullptr
+                            ? cdo->
+                                GetFunctionByNameInChain(
+                                    name
+                                )
+                            : nullptr;
+
+                    std::uint64_t parameters{};
+                    std::uint64_t inputs{};
+                    std::uint64_t returns{};
+                    std::uint64_t string_inputs{};
+
+                    std::int32_t input_offset{-1};
+                    std::int32_t input_size{-1};
+                    std::int32_t input_class_index{-1};
+                    std::uint64_t input_flags{};
+
+                    static const auto
+                        str_property_name =
+                            RC::Unreal::FName(
+                                STR("StrProperty"),
+                                RC::Unreal::FNAME_Find
+                            );
+
+                    const auto str_property_index =
+                        str_property_name.
+                            GetComparisonIndex();
+
+                    if (function != nullptr)
+                    {
+                        for (
+                            auto* property :
+                                function->
+                                    ForEachProperty()
+                        )
+                        {
+                            if (
+                                property == nullptr ||
+                                !property->
+                                    HasAnyPropertyFlags(
+                                        RC::Unreal::
+                                            CPF_Parm
+                                    )
+                            )
+                            {
+                                continue;
+                            }
+
+                            ++parameters;
+
+                            if (
+                                property->
+                                    HasAnyPropertyFlags(
+                                        RC::Unreal::
+                                            CPF_ReturnParm
+                                    )
+                            )
+                            {
+                                ++returns;
+                                continue;
+                            }
+
+                            ++inputs;
+
+                            const auto
+                                property_class_index =
+                                    property->
+                                        GetClass().
+                                        GetFName().
+                                        GetComparisonIndex();
+
+                            const bool string_property =
+                                property_class_index ==
+                                    str_property_index;
+
+                            if (string_property)
+                            {
+                                ++string_inputs;
+
+                                if (input_offset < 0)
+                                {
+                                    input_offset =
+                                        property->
+                                            GetOffset_Internal();
+
+                                    input_size =
+                                        property->
+                                            GetSize();
+
+                                    input_class_index =
+                                        property_class_index;
+
+                                    input_flags =
+                                        static_cast<
+                                            std::uint64_t
+                                        >(
+                                            property->
+                                                GetPropertyFlags()
+                                        );
+                                }
+                            }
+                        }
+                    }
+
+                    const auto parms =
+                        function != nullptr
+                            ? function->GetParmsSize()
+                            : 0;
+
+                    const bool passed =
+                        function != nullptr &&
+                        parms == 16 &&
+                        parameters == 1 &&
+                        inputs == 1 &&
+                        returns == 0 &&
+                        string_inputs == 1 &&
+                        input_offset == 0 &&
+                        input_size == 16;
+
+                    emit_format(
+                        "[ModIntegratedStorageCpp] "
+                        "TRANSPORT_RPC label=%s "
+                        "function=%d parms=%d "
+                        "parameters=%llu inputs=%llu "
+                        "returns=%llu str_inputs=%llu "
+                        "offset=%d size=%d class_index=%d "
+                        "expected_str_class_index=%d "
+                        "flags=%llu passed=%d",
+                        label,
+                        function != nullptr ? 1 : 0,
+                        static_cast<int>(parms),
+                        static_cast<
+                            unsigned long long
+                        >(parameters),
+                        static_cast<
+                            unsigned long long
+                        >(inputs),
+                        static_cast<
+                            unsigned long long
+                        >(returns),
+                        static_cast<
+                            unsigned long long
+                        >(string_inputs),
+                        input_offset,
+                        input_size,
+                        input_class_index,
+                        str_property_index,
+                        static_cast<
+                            unsigned long long
+                        >(input_flags),
+                        passed ? 1 : 0
+                    );
+
+                    return passed;
+                };
+
+            const bool request_rpc_ok =
+                describe_rpc(
+                    player_controller_cdo,
+                    STR(
+                        "Debug_CheatCommand_ToServer"
+                    ),
+                    "request"
+                );
+
+            const bool reply_rpc_ok =
+                describe_rpc(
+                    player_controller_cdo,
+                    STR(
+                        "Debug_ReceiveCheatCommand_"
+                        "ToClient"
+                    ),
+                    "reply"
+                );
+
+            auto* known_guid =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UScriptStruct*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR(
+                            "/Script/CoreUObject.Guid"
+                        )
+                    );
+
+            auto* known_item_id =
+                RC::Unreal::UObjectGlobals::
+                    StaticFindObject<
+                        RC::Unreal::UScriptStruct*
+                    >(
+                        nullptr,
+                        nullptr,
+                        STR("/Script/Pal.PalItemId")
+                    );
+
+            auto* static_id_property =
+                known_item_id != nullptr
+                    ? known_item_id->
+                        GetPropertyByNameInChain(
+                            STR("StaticId")
+                        )
+                    : nullptr;
+
+            auto* static_id_name_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FNameProperty
+                >(static_id_property);
+
+            const bool static_id_layout_ok =
+                known_item_id != nullptr &&
+                known_item_id->
+                    GetPropertiesSize() == 40 &&
+                static_id_name_property != nullptr &&
+                static_id_property->
+                    GetOffset_Internal() == 0 &&
+                static_id_property->
+                    GetSize() == 8;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_ITEM_ID_LAYOUT "
+                "item_struct=%d struct_size=%d "
+                "static_id=%d static_name=%d "
+                "static_offset=%d static_size=%d "
+                "passed=%d",
+                known_item_id != nullptr ? 1 : 0,
+                known_item_id != nullptr
+                    ? known_item_id->
+                        GetPropertiesSize()
+                    : -1,
+                static_id_property != nullptr
+                    ? 1
+                    : 0,
+                static_id_name_property != nullptr
+                    ? 1
+                    : 0,
+                static_id_property != nullptr
+                    ? static_id_property->
+                        GetOffset_Internal()
+                    : -1,
+                static_id_property != nullptr
+                    ? static_id_property->
+                        GetSize()
+                    : -1,
+                static_id_layout_ok ? 1 : 0
+            );
+
+            std::unordered_set<
+                RC::Unreal::UObject*
+            > unique_camps{};
+
+            for (
+                const auto& [
+                    ignored_guild_key,
+                    guild
+                ] : registration_plan
+            )
+            {
+                static_cast<void>(
+                    ignored_guild_key
+                );
+
+                for (
+                    const auto& [
+                        ignored_storage,
+                        camp
+                    ] : guild.storage_camps
+                )
+                {
+                    static_cast<void>(
+                        ignored_storage
+                    );
+
+                    if (camp != nullptr)
+                    {
+                        unique_camps.insert(camp);
+                    }
+                }
+
+                for (
+                    const auto& [
+                        ignored_chest,
+                        camp
+                    ] : guild.chest_camps
+                )
+                {
+                    static_cast<void>(
+                        ignored_chest
+                    );
+
+                    if (camp != nullptr)
+                    {
+                        unique_camps.insert(camp);
+                    }
+                }
+            }
+
+            std::unordered_set<
+                GuildKey,
+                GuildKeyHash
+            > camp_ids{};
+
+            std::uint64_t camp_id_properties{};
+            std::uint64_t camp_id_structs{};
+            std::uint64_t camp_id_guid_types{};
+            std::uint64_t camp_id_size_16{};
+            std::uint64_t camp_id_nonzero{};
+            std::uint64_t camp_id_duplicates{};
+            std::uint64_t camp_id_exceptions{};
+
+            for (auto* camp : unique_camps)
+            {
+                try
+                {
+                    auto* id_property =
+                        camp->
+                            GetPropertyByNameInChain(
+                                STR("ID")
+                            );
+
+                    auto* id_struct_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FStructProperty
+                        >(id_property);
+
+                    if (id_property != nullptr)
+                    {
+                        ++camp_id_properties;
+                    }
+
+                    if (id_struct_property != nullptr)
+                    {
+                        ++camp_id_structs;
+                    }
+
+                    const bool guid_type =
+                        id_struct_property != nullptr &&
+                        known_guid != nullptr &&
+                        id_struct_property->
+                            GetStruct().Get() ==
+                            known_guid;
+
+                    if (guid_type)
+                    {
+                        ++camp_id_guid_types;
+                    }
+
+                    const bool size_16 =
+                        id_property != nullptr &&
+                        id_property->GetSize() == 16;
+
+                    if (size_16)
+                    {
+                        ++camp_id_size_16;
+                    }
+
+                    GuildKey camp_id{};
+
+                    if (
+                        id_property == nullptr ||
+                        id_struct_property == nullptr ||
+                        !guid_type ||
+                        !size_16
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* value =
+                        id_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(camp);
+
+                    if (value == nullptr)
+                    {
+                        continue;
+                    }
+
+                    std::memcpy(
+                        camp_id.data(),
+                        value,
+                        camp_id.size()
+                    );
+
+                    const bool nonzero =
+                        !guid_is_zero(camp_id);
+
+                    if (nonzero)
+                    {
+                        ++camp_id_nonzero;
+
+                        const auto [
+                            ignored_id,
+                            inserted
+                        ] =
+                            camp_ids.insert(
+                                camp_id
+                            );
+
+                        static_cast<void>(
+                            ignored_id
+                        );
+
+                        if (!inserted)
+                        {
+                            ++camp_id_duplicates;
+                        }
+                    }
+
+                    GuildKey guild{};
+                    const bool guild_ok =
+                        copy_guild_key(
+                            camp,
+                            guild
+                        );
+
+                    const auto id_hex =
+                        guid_to_hex(camp_id);
+
+                    const auto guild_hex =
+                        guid_to_hex(guild);
+
+                    emit_format(
+                        "[ModIntegratedStorageCpp] "
+                        "TRANSPORT_CAMP_ID "
+                        "id=%s guild=%s guild_ok=%d "
+                        "offset=%d size=%d guid_type=%d "
+                        "nonzero=%d",
+                        id_hex.data(),
+                        guild_hex.data(),
+                        guild_ok ? 1 : 0,
+                        id_property->
+                            GetOffset_Internal(),
+                        id_property->GetSize(),
+                        guid_type ? 1 : 0,
+                        nonzero ? 1 : 0
+                    );
+                }
+                catch (...)
+                {
+                    ++camp_id_exceptions;
+                }
+            }
+
+            const bool camp_id_ok =
+                !unique_camps.empty() &&
+                camp_id_properties ==
+                    unique_camps.size() &&
+                camp_id_structs ==
+                    unique_camps.size() &&
+                camp_id_guid_types ==
+                    unique_camps.size() &&
+                camp_id_size_16 ==
+                    unique_camps.size() &&
+                camp_id_nonzero ==
+                    unique_camps.size() &&
+                camp_ids.size() ==
+                    unique_camps.size() &&
+                camp_id_duplicates == 0 &&
+                camp_id_exceptions == 0;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_CAMP_ID_SUMMARY "
+                "camps=%zu properties=%llu structs=%llu "
+                "guid_types=%llu size16=%llu "
+                "nonzero=%llu unique=%zu duplicates=%llu "
+                "exceptions=%llu passed=%d",
+                unique_camps.size(),
+                static_cast<
+                    unsigned long long
+                >(camp_id_properties),
+                static_cast<
+                    unsigned long long
+                >(camp_id_structs),
+                static_cast<
+                    unsigned long long
+                >(camp_id_guid_types),
+                static_cast<
+                    unsigned long long
+                >(camp_id_size_16),
+                static_cast<
+                    unsigned long long
+                >(camp_id_nonzero),
+                camp_ids.size(),
+                static_cast<
+                    unsigned long long
+                >(camp_id_duplicates),
+                static_cast<
+                    unsigned long long
+                >(camp_id_exceptions),
+                camp_id_ok ? 1 : 0
+            );
+
+            std::vector<GuildKey> guild_order{};
+            guild_order.reserve(
+                registration_plan.size()
+            );
+
+            for (
+                const auto& [
+                    guild_key,
+                    ignored_guild
+                ] : registration_plan
+            )
+            {
+                static_cast<void>(
+                    ignored_guild
+                );
+                guild_order.push_back(
+                    guild_key
+                );
+            }
+
+            std::sort(
+                guild_order.begin(),
+                guild_order.end()
+            );
+
+            const RegistrationPlanGuild*
+                selected_guild_plan{};
+
+            GuildKey selected_guild{};
+
+            RC::Unreal::UObject*
+                selected_requester_camp{};
+
+            GuildKey selected_requester_id{};
+
+            for (const auto& guild_key : guild_order)
+            {
+                const auto iterator =
+                    registration_plan.find(
+                        guild_key
+                    );
+
+                if (
+                    iterator ==
+                        registration_plan.end()
+                )
+                {
+                    continue;
+                }
+
+                const auto& guild =
+                    iterator->second;
+
+                std::unordered_set<
+                    RC::Unreal::UObject*
+                > guild_camps{};
+
+                for (
+                    const auto& [
+                        ignored_storage,
+                        camp
+                    ] : guild.storage_camps
+                )
+                {
+                    static_cast<void>(
+                        ignored_storage
+                    );
+
+                    if (camp != nullptr)
+                    {
+                        guild_camps.insert(camp);
+                    }
+                }
+
+                if (
+                    guild_camps.size() < 2 ||
+                    guild.chest_camps.empty()
+                )
+                {
+                    continue;
+                }
+
+                std::vector<
+                    std::pair<
+                        GuildKey,
+                        RC::Unreal::UObject*
+                    >
+                > ordered_camps{};
+
+                for (auto* camp : guild_camps)
+                {
+                    auto* id_property =
+                        camp->
+                            GetPropertyByNameInChain(
+                                STR("ID")
+                            );
+
+                    auto* id_struct_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FStructProperty
+                        >(id_property);
+
+                    if (
+                        id_property == nullptr ||
+                        id_struct_property == nullptr ||
+                        known_guid == nullptr ||
+                        id_struct_property->
+                            GetStruct().Get() !=
+                            known_guid ||
+                        id_property->GetSize() != 16
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* value =
+                        id_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(camp);
+
+                    if (value == nullptr)
+                    {
+                        continue;
+                    }
+
+                    GuildKey id{};
+                    std::memcpy(
+                        id.data(),
+                        value,
+                        id.size()
+                    );
+
+                    if (guid_is_zero(id))
+                    {
+                        continue;
+                    }
+
+                    ordered_camps.emplace_back(
+                        id,
+                        camp
+                    );
+                }
+
+                if (ordered_camps.size() < 2)
+                {
+                    continue;
+                }
+
+                std::sort(
+                    ordered_camps.begin(),
+                    ordered_camps.end(),
+                    [](
+                        const auto& left,
+                        const auto& right
+                    )
+                    {
+                        return left.first <
+                            right.first;
+                    }
+                );
+
+                auto* candidate_requester =
+                    ordered_camps.front().second;
+
+                std::size_t candidate_foreign_chests{};
+
+                for (
+                    const auto& [
+                        ignored_chest,
+                        chest_camp
+                    ] : guild.chest_camps
+                )
+                {
+                    static_cast<void>(
+                        ignored_chest
+                    );
+
+                    if (
+                        chest_camp != nullptr &&
+                        chest_camp !=
+                            candidate_requester
+                    )
+                    {
+                        ++candidate_foreign_chests;
+                    }
+                }
+
+                if (candidate_foreign_chests == 0)
+                {
+                    continue;
+                }
+
+                selected_guild_plan =
+                    &guild;
+
+                selected_guild =
+                    guild_key;
+
+                selected_requester_camp =
+                    candidate_requester;
+
+                selected_requester_id =
+                    ordered_camps.front().first;
+
+                break;
+            }
+
+            static auto* managers =
+                new std::vector<
+                    RC::Unreal::UObject*
+                >();
+
+            managers->clear();
+
+            RC::Unreal::UObjectGlobals::
+                FindAllOf(
+                    STR("PalItemContainerManager"),
+                    *managers
+                );
+
+            RC::Unreal::UObject*
+                item_container_manager{};
+
+            std::size_t nonnull_managers{};
+
+            for (auto* candidate : *managers)
+            {
+                if (candidate == nullptr)
+                {
+                    continue;
+                }
+
+                ++nonnull_managers;
+
+                if (
+                    item_container_manager ==
+                        nullptr
+                )
+                {
+                    item_container_manager =
+                        candidate;
+                }
+            }
+
+            auto* get_container_function =
+                item_container_manager != nullptr
+                    ? item_container_manager->
+                        GetFunctionByNameInChain(
+                            STR("GetContainer")
+                        )
+                    : nullptr;
+
+            const bool manager_ok =
+                managers->size() == 1 &&
+                nonnull_managers == 1 &&
+                item_container_manager !=
+                    nullptr &&
+                get_container_function !=
+                    nullptr &&
+                get_container_function->
+                    GetParmsSize() == 24;
+
+            std::unordered_map<
+                TransportItemNameKey,
+                std::int64_t,
+                TransportItemNameKeyHash
+            > pool{};
+
+            std::uint64_t foreign_chests{};
+            std::uint64_t module_functions{};
+            std::uint64_t modules{};
+            std::uint64_t id_functions{};
+            std::uint64_t ids{};
+            std::uint64_t resolved_containers{};
+            std::uint64_t slot_arrays{};
+            std::uint64_t slot_objects{};
+            std::uint64_t positive_slots{};
+            std::uint64_t fully_read_slots{};
+            std::uint64_t slot_layout_failures{};
+            std::uint64_t pool_exceptions{};
+            std::int64_t total_quantity{};
+
+            if (
+                selected_guild_plan != nullptr &&
+                selected_requester_camp !=
+                    nullptr &&
+                manager_ok &&
+                static_id_layout_ok
+            )
+            {
+                for (
+                    const auto& [
+                        chest,
+                        chest_camp
+                    ] :
+                        selected_guild_plan->
+                            chest_camps
+                )
+                {
+                    if (
+                        chest == nullptr ||
+                        chest_camp == nullptr ||
+                        chest_camp ==
+                            selected_requester_camp
+                    )
+                    {
+                        continue;
+                    }
+
+                    ++foreign_chests;
+
+                    try
+                    {
+                        auto* module_function =
+                            chest->
+                                GetFunctionByNameInChain(
+                                    STR(
+                                        "GetItemContainerModule"
+                                    )
+                                );
+
+                        if (
+                            module_function == nullptr ||
+                            module_function->
+                                GetParmsSize() != 8
+                        )
+                        {
+                            continue;
+                        }
+
+                        ++module_functions;
+
+                        std::array<std::byte, 8>
+                            module_buffer{};
+
+                        chest->ProcessEvent(
+                            module_function,
+                            module_buffer.data()
+                        );
+
+                        RC::Unreal::UObject* module{};
+
+                        std::memcpy(
+                            &module,
+                            module_buffer.data(),
+                            sizeof(module)
+                        );
+
+                        if (module == nullptr)
+                        {
+                            continue;
+                        }
+
+                        ++modules;
+
+                        auto* id_function =
+                            module->
+                                GetFunctionByNameInChain(
+                                    STR("GetContainerId")
+                                );
+
+                        if (
+                            id_function == nullptr ||
+                            id_function->
+                                GetParmsSize() != 16
+                        )
+                        {
+                            continue;
+                        }
+
+                        ++id_functions;
+
+                        std::array<std::byte, 16>
+                            id_buffer{};
+
+                        module->ProcessEvent(
+                            id_function,
+                            id_buffer.data()
+                        );
+
+                        GuildKey container_id{};
+
+                        std::memcpy(
+                            container_id.data(),
+                            id_buffer.data(),
+                            container_id.size()
+                        );
+
+                        if (guid_is_zero(container_id))
+                        {
+                            continue;
+                        }
+
+                        ++ids;
+
+                        std::array<std::byte, 24>
+                            get_buffer{};
+
+                        std::memcpy(
+                            get_buffer.data(),
+                            container_id.data(),
+                            container_id.size()
+                        );
+
+                        item_container_manager->
+                            ProcessEvent(
+                                get_container_function,
+                                get_buffer.data()
+                            );
+
+                        RC::Unreal::UObject* container{};
+
+                        std::memcpy(
+                            &container,
+                            get_buffer.data() + 16,
+                            sizeof(container)
+                        );
+
+                        if (container == nullptr)
+                        {
+                            continue;
+                        }
+
+                        ++resolved_containers;
+
+                        auto* slot_property =
+                            container->
+                                GetPropertyByNameInChain(
+                                    STR("ItemSlotArray")
+                                );
+
+                        auto* array_property =
+                            RC::Unreal::CastField<
+                                RC::Unreal::
+                                    FArrayProperty
+                            >(slot_property);
+
+                        auto* object_property =
+                            array_property != nullptr
+                                ? RC::Unreal::
+                                    CastField<
+                                        RC::Unreal::
+                                            FObjectPropertyBase
+                                    >(
+                                        array_property->
+                                            GetInner()
+                                    )
+                                : nullptr;
+
+                        if (
+                            array_property == nullptr ||
+                            object_property == nullptr
+                        )
+                        {
+                            ++slot_layout_failures;
+                            continue;
+                        }
+
+                        ++slot_arrays;
+
+                        RC::Unreal::
+                            FScriptArrayHelper_InContainer
+                                helper(
+                                    array_property,
+                                    container
+                                );
+
+                        for (
+                            std::int32_t slot_index{};
+                            slot_index <
+                                helper.Num();
+                            ++slot_index
+                        )
+                        {
+                            auto* slot =
+                                object_property->
+                                    GetObjectPropertyValue(
+                                        helper.GetRawPtr(
+                                            slot_index
+                                        )
+                                    );
+
+                            if (slot == nullptr)
+                            {
+                                continue;
+                            }
+
+                            ++slot_objects;
+
+                            auto* item_property =
+                                RC::Unreal::CastField<
+                                    RC::Unreal::
+                                        FStructProperty
+                                >(
+                                    slot->
+                                        GetPropertyByNameInChain(
+                                            STR("ItemId")
+                                        )
+                                );
+
+                            auto* stack_property =
+                                RC::Unreal::CastField<
+                                    RC::Unreal::
+                                        FNumericProperty
+                                >(
+                                    slot->
+                                        GetPropertyByNameInChain(
+                                            STR("StackCount")
+                                        )
+                                );
+
+                            if (
+                                item_property == nullptr ||
+                                stack_property == nullptr ||
+                                known_item_id == nullptr ||
+                                item_property->
+                                    GetStruct().Get() !=
+                                    known_item_id ||
+                                item_property->GetSize() !=
+                                    40 ||
+                                stack_property->GetSize() !=
+                                    4
+                            )
+                            {
+                                ++slot_layout_failures;
+                                continue;
+                            }
+
+                            auto* item_data =
+                                item_property->
+                                    ContainerPtrToValuePtr<
+                                        void
+                                    >(slot);
+
+                            auto* stack_data =
+                                stack_property->
+                                    ContainerPtrToValuePtr<
+                                        void
+                                    >(slot);
+
+                            if (
+                                item_data == nullptr ||
+                                stack_data == nullptr
+                            )
+                            {
+                                ++slot_layout_failures;
+                                continue;
+                            }
+
+                            std::int32_t stack_count{};
+
+                            std::memcpy(
+                                &stack_count,
+                                stack_data,
+                                sizeof(stack_count)
+                            );
+
+                            if (stack_count <= 0)
+                            {
+                                continue;
+                            }
+
+                            ++positive_slots;
+
+                            TransportItemNameKey
+                                static_name{};
+
+                            std::memcpy(
+                                static_name.data(),
+                                static_cast<
+                                    const std::byte*
+                                >(item_data) +
+                                    static_id_property->
+                                        GetOffset_Internal(),
+                                static_name.size()
+                            );
+
+                            pool[static_name] +=
+                                static_cast<
+                                    std::int64_t
+                                >(stack_count);
+
+                            total_quantity +=
+                                static_cast<
+                                    std::int64_t
+                                >(stack_count);
+
+                            ++fully_read_slots;
+                        }
+                    }
+                    catch (...)
+                    {
+                        ++pool_exceptions;
+                    }
+                }
+            }
+
+            std::vector<
+                std::pair<
+                    TransportItemNameKey,
+                    std::int64_t
+                >
+            > ordered_pool{};
+
+            ordered_pool.reserve(pool.size());
+
+            for (
+                const auto& [key, quantity] :
+                    pool
+            )
+            {
+                ordered_pool.emplace_back(
+                    key,
+                    quantity
+                );
+            }
+
+            std::sort(
+                ordered_pool.begin(),
+                ordered_pool.end(),
+                [](
+                    const auto& left,
+                    const auto& right
+                )
+                {
+                    return left.first <
+                        right.first;
+                }
+            );
+
+            constexpr std::size_t
+                k_max_pool_report_items = 16;
+
+            for (
+                std::size_t index{};
+                index < ordered_pool.size() &&
+                index < k_max_pool_report_items;
+                ++index
+            )
+            {
+                const auto key_hex =
+                    transport_name_key_to_hex(
+                        ordered_pool[index].first
+                    );
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_POOL_ITEM "
+                    "index=%zu name_key=%s quantity=%lld",
+                    index,
+                    key_hex.data(),
+                    static_cast<long long>(
+                        ordered_pool[index].second
+                    )
+                );
+            }
+
+            const auto guild_hex =
+                guid_to_hex(selected_guild);
+
+            const auto requester_hex =
+                guid_to_hex(
+                    selected_requester_id
+                );
+
+            const bool pool_ok =
+                selected_guild_plan != nullptr &&
+                selected_requester_camp !=
+                    nullptr &&
+                !guid_is_zero(selected_guild) &&
+                !guid_is_zero(
+                    selected_requester_id
+                ) &&
+                manager_ok &&
+                foreign_chests > 0 &&
+                module_functions ==
+                    foreign_chests &&
+                modules ==
+                    foreign_chests &&
+                id_functions ==
+                    foreign_chests &&
+                ids ==
+                    foreign_chests &&
+                resolved_containers ==
+                    foreign_chests &&
+                slot_arrays ==
+                    foreign_chests &&
+                positive_slots > 0 &&
+                fully_read_slots ==
+                    positive_slots &&
+                slot_layout_failures == 0 &&
+                pool_exceptions == 0 &&
+                !pool.empty() &&
+                total_quantity > 0;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_POOL "
+                "run=%llu guild=%s requester=%s "
+                "manager_objects=%zu manager_nonnull=%zu "
+                "manager_ok=%d foreign_chests=%llu "
+                "module_functions=%llu modules=%llu "
+                "id_functions=%llu ids=%llu "
+                "containers=%llu slot_arrays=%llu "
+                "slot_objects=%llu positive_slots=%llu "
+                "fully_read_slots=%llu "
+                "layout_failures=%llu exceptions=%llu "
+                "unique_items=%zu total_quantity=%lld "
+                "passed=%d",
+                static_cast<
+                    unsigned long long
+                >(planned_run),
+                guild_hex.data(),
+                requester_hex.data(),
+                managers->size(),
+                nonnull_managers,
+                manager_ok ? 1 : 0,
+                static_cast<
+                    unsigned long long
+                >(foreign_chests),
+                static_cast<
+                    unsigned long long
+                >(module_functions),
+                static_cast<
+                    unsigned long long
+                >(modules),
+                static_cast<
+                    unsigned long long
+                >(id_functions),
+                static_cast<
+                    unsigned long long
+                >(ids),
+                static_cast<
+                    unsigned long long
+                >(resolved_containers),
+                static_cast<
+                    unsigned long long
+                >(slot_arrays),
+                static_cast<
+                    unsigned long long
+                >(slot_objects),
+                static_cast<
+                    unsigned long long
+                >(positive_slots),
+                static_cast<
+                    unsigned long long
+                >(fully_read_slots),
+                static_cast<
+                    unsigned long long
+                >(slot_layout_failures),
+                static_cast<
+                    unsigned long long
+                >(pool_exceptions),
+                pool.size(),
+                static_cast<long long>(
+                    total_quantity
+                ),
+                pool_ok ? 1 : 0
+            );
+
+            const bool passed =
+                request_rpc_ok &&
+                reply_rpc_ok &&
+                camp_id_ok &&
+                static_id_layout_ok &&
+                pool_ok;
+
+            if (passed)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_METADATA RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_METADATA RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_METADATA RESULT=EXCEPTION"
+            );
+        }
     }
 
 
@@ -11589,6 +12998,12 @@ namespace
                 registration_probe_target_storage
             );
 
+        run_read_only_transport_metadata_probe(
+            registration_plan,
+            plan_complete,
+            planned_run
+        );
+
         run_read_only_observability_metadata_probe(
             registration_probe_chest,
             registration_probe_target_storage,
@@ -11856,12 +13271,12 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.7a-arm-gated-full-plan-executor");
+                STR("0.1.0-linux-stage4d.8a-transport-metadata-r2");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server arm-gated full-plan "
-                    "server registration executor."
+                    "Linux dedicated-server read-only transport "
+                    "metadata and bounded foreign-pool probe."
                 );
 
             ModAuthors =

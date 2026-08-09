@@ -27,7 +27,7 @@ description.
 
 ```text
 Latest accepted source/runtime stage:
-Stage 4d.7a — arm-gated full-plan registration executor
+Stage 4d.8a R2 — read-only transport metadata + bounded foreign-pool probe
 
 Latest accepted functional observation:
 Stage 4d.7b — remote-client gate characterization
@@ -5850,38 +5850,357 @@ sufficient for final acceptance.
 
 ---
 
-## 55. Immediate next action
+---
 
-Run Stage 4d.8a:
+## 55. Stage 4d.8a R2 — transport metadata + bounded foreign-pool runtime
+
+### Classification
 
 ```text
-read-only transport metadata characterization
+R1:
+COMPILE-REJECTED
+RUNTIME NEVER STARTED
+AUTOMATIC ROLLBACK PASS
+
+R2:
+BUILD ACCEPTED
+ISOLATED READ-ONLY RUNTIME ACCEPTED
 ```
 
-Do not send a transport reply yet.
+Accepted R2 identities:
 
-Required runtime characterization:
+```text
+Base HEAD:
+a808e98938e01e896a97f4e17cbd34bb678c4221
 
-1. Resolve
-   `PalPlayerController.Debug_CheatCommand_ToServer`.
-2. Record exact `ParmsSize`, parameter count, parameter offset, parameter size,
-   and reflected property class for its single `FString`.
-3. Resolve
-   `PalPlayerController.Debug_ReceiveCheatCommand_ToClient`.
-4. Record the same exact metadata for its single `FString`.
-5. Resolve `PalBaseCampModel.ID` reflectively.
-6. Require an exact 16-byte GUID-compatible property layout and compare copied
-   values against the already-known camp population.
-7. For multiple mature planned ordinary chests, use only the bounded route:
-   chest -> `GetItemContainerModule` -> `GetContainerId` -> manager
-   `GetContainer`.
-8. On the exact resolved containers, characterize reflected `ItemSlotArray`.
-9. Characterize the slot object surface needed to read item ID and count without
-   raw fixed offsets if possible.
-10. Prove a bounded foreign-pool aggregate can be constructed read-only for at
-    least one guild/camp pair.
-11. Do not call `FindAllOf("PalItemContainer")`.
-12. Do not invoke either request/reply RPC.
-13. Do not add a reply `ProcessEvent`.
-14. Do not invoke any discarded Stage-4d lifecycle callback.
-15. Keep production untouched and restore the isolated test exactly.
+Base source SHA256:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+R2 source SHA256:
+4d8247d7beb1fea72df0d91cfd653dfb016b2d43deff299c3e7439baac984000
+
+Artifact SHA256:
+10c2b8e3c60ba4e618c6709397c097694255ed7b0174bcdbd1d968e09645c594
+
+Build ID:
+671730ac4ee16633a317409cd1e9c552b19baca3
+
+Runsheet SHA256 before this checkpoint:
+86468e48d150ed4310381bd2a2c55c4e76bce256a30c3f5a974d3e813c60a2a7
+```
+
+Runtime evidence archive SHA256:
+
+```text
+de0a9a2ecd6d5bb9e548f66e096e12af51ae1dc72da4de4946fbba6c1e81dd18
+```
+
+### R1 compile rejection
+
+The first 4d.8a candidate was rejected by the compiler before runtime.
+
+Rejected R1 source SHA256:
+
+```text
+7f40d2941befb79fdb9a9d3f365d830d645c3f6b712685d130bf965f56f4ae8e
+```
+
+Two defects were identified:
+
+1. `CastField<FStrProperty>` is not valid in the pinned NullPrism/UE4SS field
+   type system;
+2. the transport-name helper emitted a multi-character `'\\0'` literal rather
+   than a real `' '`.
+
+The build wrapper automatically restored:
+
+```text
+Linux source:
+e968bc43d01008808cae58bb7dd9258dc2db2278e5f5ffe017d3fb5349e267b9
+
+staged artifact:
+2bbde02085d87d99acce5f0c3f7765e1e95ff6916e875dc25181883cca79c358
+```
+
+No PalServer runtime occurred for R1.
+
+### R2 correction
+
+R2 identifies an FString parameter through the reflected property's class FName:
+
+```text
+property
+    -> GetClass()
+    -> GetFName()
+    -> GetComparisonIndex()
+```
+
+and compares it with:
+
+```text
+FName("StrProperty", FNAME_Find)
+```
+
+The transport-name helper uses a real null character terminator.
+
+R2 built successfully with only the known NullPrism/UE4SS warnings.
+
+### Exact RPC metadata
+
+Both upstream transport carrier RPCs resolved identically:
+
+```text
+Debug_CheatCommand_ToServer:
+function=1
+ParmsSize=16
+parameters=1
+inputs=1
+returns=0
+StrProperty inputs=1
+offset=0
+size=16
+class_index=97
+expected_StrProperty_class_index=97
+passed=1
+
+Debug_ReceiveCheatCommand_ToClient:
+function=1
+ParmsSize=16
+parameters=1
+inputs=1
+returns=0
+StrProperty inputs=1
+offset=0
+size=16
+class_index=97
+expected_StrProperty_class_index=97
+passed=1
+```
+
+This is exact runtime proof that both transport RPC payloads are a single
+16-byte `FString` parameter at offset zero.
+
+### PalItemId.StaticId layout
+
+Runtime reflection established:
+
+```text
+PalItemId struct size=40
+StaticId property present=1
+StaticId property class=FName
+StaticId offset=0
+StaticId size=8
+passed=1
+```
+
+Therefore the bounded pool may safely aggregate by the exact 8-byte `FName`
+identity before wire serialization.
+
+### PalBaseCampModel.ID layout
+
+All twenty planned camps were characterized.
+
+Summary:
+
+```text
+camps=20
+properties=20
+structs=20
+guid_types=20
+size16=20
+nonzero=20
+unique=20
+duplicates=0
+exceptions=0
+passed=1
+```
+
+Every reflected camp `ID` was:
+
+```text
+offset=88
+size=16
+type=/Script/CoreUObject.Guid
+nonzero
+unique
+```
+
+This matches upstream's raw `0x58` camp-ID offset while replacing that raw read
+with an exact reflected property.
+
+### Bounded foreign-pool construction
+
+The runtime probe selected guild:
+
+```text
+20f979c33446e7f1f8cea19499aad71a
+```
+
+with requester camp:
+
+```text
+0e254aa41a44c4715a9359a8f1a4ec41
+```
+
+and built:
+
+```text
+same guild
+MINUS requester camp
+```
+
+using only mature planner chests and the bounded route:
+
+```text
+known planned chest
+    ->
+GetItemContainerModule
+    ->
+GetContainerId
+    ->
+PalItemContainerManager.GetContainer
+    ->
+exact PalItemContainer
+    ->
+reflected ItemSlotArray
+    ->
+reflected ItemId.StaticId
+    ->
+reflected StackCount
+```
+
+Accepted pool telemetry:
+
+```text
+PalItemContainerManager objects=1
+manager nonnull=1
+manager metadata=PASS
+
+foreign_chests=22
+module_functions=22
+modules=22
+id_functions=22
+container_ids=22
+resolved_containers=22
+slot_arrays=22
+
+slot_objects=850
+positive_slots=288
+fully_read_slots=288
+
+layout_failures=0
+exceptions=0
+
+unique_items=272
+total_quantity=69227
+
+passed=1
+```
+
+This proves the Linux server can construct a real foreign same-guild material
+pool without broad `FindAllOf("PalItemContainer")`.
+
+### Mutation boundary remained closed
+
+The Stage 4d.7a registration arm was absent throughout this runtime.
+
+Exact mutation-gate telemetry:
+
+```text
+FULL_PLAN_REGISTER GATE=DISABLED markers=1
+FULL_PLAN_REGISTER GATE=ARMED markers=0
+registration START markers=0
+registration SUMMARY markers=0
+registration PASS markers=0
+```
+
+The new transport probe contained no request/reply RPC hook and invoked neither
+transport RPC.
+
+### Runtime safety and restoration
+
+Accepted runtime safety:
+
+```text
+isolated PalServer PID=254
+same PID at probe completion
+internal UDP 8211=PASS
+crash/fatal markers=0
+```
+
+Exact restoration:
+
+```text
+isolated running=false
+restart policy=no
+
+normal isolated mod SHA256:
+56efb4928b62b520845ab17d8bb5a2f8be1453e7c73a29c78a0127a4dcf1ed72
+
+Level.sav SHA256:
+a0c0464c33763a021727ae345aadda8df61ed6dd72fe7cd0e147fd965e32acf6
+
+player saves=19
+Stage 4d.7a arm=absent
+```
+
+Production remained:
+
+```text
+running=true
+PalServer PID=83
+StartedAt=2026-08-08T18:30:02.661576192Z
+RestartCount=0
+```
+
+### Accepted conclusion
+
+Stage 4d.8a R2 proves all server-side data prerequisites for the upstream
+transport reply except wire-format item-name serialization:
+
+```text
+request RPC FString layout       PROVEN
+reply RPC FString layout         PROVEN
+request camp GUID lookup data    PROVEN
+same-guild-minus-own pool        PROVEN
+bounded exact container reads    PROVEN
+FName binary item identity       PROVEN
+
+FName -> stable item-name string NOT YET RUNTIME-PROVEN
+request hook / reply send        NOT YET IMPLEMENTED
+```
+
+---
+
+## 56. Immediate next action
+
+Run Stage 4d.8b:
+
+```text
+bounded FName wire-serialization characterization
+```
+
+Still do not hook or invoke the transport RPCs.
+
+Required runtime work:
+
+1. Reuse only the exact item `FName` keys produced by the accepted bounded pool.
+2. Convert each bounded key with the pinned runtime's `FName::ToString()` path.
+3. Reject empty names.
+4. Construct a new `FName` from each serialized string.
+5. Require the reconstructed `FName` to equal the original key.
+6. Aggregate by serialized item-name text and require quantities to match the
+   accepted binary-key aggregate exactly.
+7. Construct an in-memory upstream-compatible:
+   `IS1|item:count,item:count,...` payload.
+8. Parse that payload locally using the upstream reply grammar.
+9. Require the parsed aggregate to match the source aggregate exactly.
+10. Record payload length and item count.
+11. Do not hook `Debug_CheatCommand_ToServer`.
+12. Do not invoke `Debug_ReceiveCheatCommand_ToClient`.
+13. Do not use broad `FindAllOf("PalItemContainer")`.
+14. Keep full-plan registration unarmed.
+15. Restore isolated state exactly and preserve production.
+16. Later runtime transport acceptance must still include a new same-guild base
+    created after server boot and require the expanded registration set to be
+    executed, not merely discovered.
