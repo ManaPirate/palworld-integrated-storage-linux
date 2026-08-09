@@ -6172,35 +6172,245 @@ request hook / reply send        NOT YET IMPLEMENTED
 
 ---
 
-## 56. Immediate next action
+---
 
-Run Stage 4d.8b:
+## 56. Stage 4d.8b — wire-serialization attempt
+
+### Classification
 
 ```text
-bounded FName wire-serialization characterization
+R1:
+COMPILE-REJECTED
+RUNTIME NEVER STARTED
+
+R2:
+BUILD ACCEPTED AS CANDIDATE
+RUNTIME REJECTED — PALSERVER CRASH
+
+DIRECT FName::ToString PATH:
+BLOCKED ON PINNED NULLPRISM RUNTIME
 ```
 
-Still do not hook or invoke the transport RPCs.
+Rejected R1 source SHA256:
 
-Required runtime work:
+```text
+75511f677787b8e89b6bc493c4000d571202e013d2c5318c8f4974a4dc8fa36a
+```
 
-1. Reuse only the exact item `FName` keys produced by the accepted bounded pool.
-2. Convert each bounded key with the pinned runtime's `FName::ToString()` path.
-3. Reject empty names.
-4. Construct a new `FName` from each serialized string.
-5. Require the reconstructed `FName` to equal the original key.
-6. Aggregate by serialized item-name text and require quantities to match the
-   accepted binary-key aggregate exactly.
-7. Construct an in-memory upstream-compatible:
-   `IS1|item:count,item:count,...` payload.
-8. Parse that payload locally using the upstream reply grammar.
-9. Require the parsed aggregate to match the source aggregate exactly.
-10. Record payload length and item count.
-11. Do not hook `Debug_CheatCommand_ToServer`.
-12. Do not invoke `Debug_ReceiveCheatCommand_ToClient`.
-13. Do not use broad `FindAllOf("PalItemContainer")`.
-14. Keep full-plan registration unarmed.
-15. Restore isolated state exactly and preserve production.
-16. Later runtime transport acceptance must still include a new same-guild base
-    created after server boot and require the expanded registration set to be
-    executed, not merely discovered.
+Rejected R2 source/artifact identity:
+
+```text
+source:
+aaa802c6d0891a7a375d93ffe5e25571ebd1e2542e6818a3cfdd5514935d0b3f
+
+artifact:
+0d3a8919a43b2159db4d837fb696e1af575ce1156824a0c1ad728e8c59f90f4b
+
+Build ID:
+1b6bbc23f787e670804849b20eb4d5eb8cdb9926
+```
+
+Runtime-failure evidence SHA256:
+
+```text
+5c78c00970fbedcf1ff76263fa885e0567eb4242473ba7319a065d8b9e23f834
+```
+
+Static postmortem evidence SHA256:
+
+```text
+2510093646e775f75cc6ec1eaa80738b8a441c0ec3e2c04d08b904e0a146ba40
+```
+
+### R1 compile rejection
+
+R1 mixed `std::wstring` / `wchar_t` with the pinned UE4SS `FName` string
+domain, which is `char16_t`.
+
+The compiler rejected the mismatch before any PalServer runtime.
+
+R1 was not executed.
+
+### R2 build result
+
+R2 corrected the wire probe to the pinned UTF-16 `char16_t` domain and removed
+`std::wstring`, `wchar_t` delimiters, and `std::stoll`.
+
+The deterministic R2 source built successfully.
+
+Static source gates remained:
+
+```text
+transport RPC hooks=0
+transport RPC invocations=0
+ISREQ construction=0
+broad FindAllOf("PalItemContainer")=0
+whole-source ProcessEvent sites=10
+```
+
+### R2 runtime failure
+
+R2 reached isolated PalServer runtime.
+
+The accepted bounded material pool completed first:
+
+```text
+foreign_chests=22
+containers=22
+slot_arrays=22
+positive_slots=288
+fully_read_slots=288
+layout_failures=0
+exceptions=0
+unique_items=272
+total_quantity=69227
+passed=1
+```
+
+This reconfirms the accepted Stage 4d.8a pool path.
+
+No wire result was emitted:
+
+```text
+TRANSPORT_WIRE summary markers=0
+TRANSPORT_WIRE PASS markers=0
+TRANSPORT_WIRE INCOMPLETE markers=0
+
+TRANSPORT_METADATA terminal markers=0
+```
+
+The isolated PalServer then terminated.
+
+Crash evidence:
+
+```text
+LowLevelFatalError
+Runtime/Core/Private/HAL/MallocBinned2.cpp
+Line 1428
+
+FMallocBinned2 Attempt to realloc an unrecognized block
+canary == 0x0 != expected allocator canary
+
+Signal 11
+Segmentation fault
+```
+
+The registration executor remained fully disabled:
+
+```text
+FULL_PLAN_REGISTER GATE=DISABLED markers=1
+FULL_PLAN_REGISTER GATE=ARMED markers=0
+registration START markers=0
+registration SUMMARY markers=0
+registration PASS markers=0
+```
+
+Therefore the crash is not attributable to the accepted full-plan registration
+executor.
+
+### Static crash postmortem
+
+The final mod marker before the allocator fatal was the successful bounded pool
+summary.
+
+Source ordering proved:
+
+```text
+first FName::ToString call:
+after TRANSPORT_POOL
+before the wire try block
+before every TRANSPORT_WIRE summary marker
+```
+
+The first call was:
+
+```text
+FName(0, 0).ToString()
+```
+
+used only to infer the UE4SS string type.
+
+The pinned NullPrism/UE4SS library exposes:
+
+```text
+FName::ToString
+ToStringInternalWrapper
+ToStringInternalWrapper_UsingScan
+ToStringInternalWrapper_UsingConv_NameToString
+FName::ToStringInternal
+FName::Conv_NameToStringInternal
+```
+
+and runtime initialization had resolved:
+
+```text
+FName::ToString address
+FName constructor address
+```
+
+The crash is an Unreal allocator fatal, not a C++ exception. Moving the call
+inside `try/catch` would therefore not establish safety.
+
+### Accepted engineering conclusion
+
+The direct:
+
+```text
+RC::Unreal::FName::ToString()
+```
+
+path is blocked for this Linux/NullPrism port unless new evidence demonstrates
+a safe implementation.
+
+Do not rerun Stage 4d.8b R2.
+
+Do not use `FName::ToString()` merely inside a `try/catch` as a supposed fix.
+
+The accepted Stage 4d.8a bounded binary-key pool remains valid.
+
+### Recovery direction
+
+The pinned UE4SS `FName` header also exposes:
+
+```text
+uint32 GetPlainNameString(TCHAR (&OutName)[NAME_SIZE])
+```
+
+This is a fixed-buffer name surface and is the next candidate for static and
+then narrowly bounded runtime characterization.
+
+It returns the plain string portion only, so numbered FNames must be handled
+explicitly.
+
+At least one already-observed pool key had a non-zero four-byte Number field,
+therefore silently discarding the FName number is not acceptable.
+
+---
+
+## 57. Immediate next action
+
+Run a non-allocating FName recovery audit before any new runtime attempt.
+
+Required work:
+
+1. Restore the development source and staged/build artifact to accepted
+   Stage 4d.8a identity.
+2. Inspect the exact pinned NullPrism implementation of
+   `FName::GetPlainNameString`.
+3. Inspect `GetNumber`, `NAME_NO_NUMBER_INTERNAL`, and any internal/external
+   number conversion helper exposed by the pinned source.
+4. Confirm whether `GetPlainNameString` itself calls `FName::ToString` or uses a
+   direct fixed-buffer/name-pool path.
+5. If it is independent of the blocked allocating ToString path, design a
+   one-name runtime probe using only:
+   - one accepted pool FName;
+   - fixed stack `TCHAR[NAME_SIZE]`;
+   - no dynamic Unreal string;
+   - no transport payload;
+   - no network RPC.
+6. Characterize the internal Number field separately.
+7. Only after one-name safety is proven expand to all bounded pool keys.
+8. Keep broad `FindAllOf("PalItemContainer")` blocked.
+9. Keep registration mutation unarmed.
+10. Practical transport acceptance later must still create a same-guild base
+    after server boot and require the expanded registration set to execute.
