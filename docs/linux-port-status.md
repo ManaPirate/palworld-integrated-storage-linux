@@ -7124,46 +7124,332 @@ Do not infer FNameEntry offsets from generic Unreal versions.
 
 ---
 
-## 61. Immediate next action
+---
 
-Run Stage 4d.8g:
+## 61. Stage 4d.8g — current PalServer ELF and offline-scanner ABI
+
+### Classification
 
 ```text
-current PalServer binary FName decoder static audit
+R1:
+WRAPPER-REJECTED / PRE-SCANNER
+NO SCANNER INVOCATION
+NO PALSERVER START
+NO FNAME EXECUTION
+NO SOURCE MUTATION
+
+R2:
+WRAPPER-REJECTED / PRE-SCANNER
+failure = host readelf unavailable (rc=127)
+NO SCANNER INVOCATION
+NO PALSERVER START
+NO FNAME EXECUTION
+NO SOURCE MUTATION
+
+R3:
+STATIC / READ-ONLY — ACCEPTED
+
+STATIC_CLASSIFICATION:
+OFFLINE_SCANNER_ABI_SOURCE_CAPTURED_REVIEW_REQUIRED
+
+OFFLINE_SCANNER_INVOCATION_ELIGIBLE:
+0
+```
+
+R3 evidence archive SHA256:
+
+```text
+ab2998c0fca4aadb0168ec88a80f129e27c473d4ce1cbcf522c0dc632997b33c
+```
+
+Accepted repository state remained:
+
+```text
+HEAD / origin:
+233dccb4356d654a7cef6ebed5f7efea528286cb
+
+Linux source SHA256:
+4d8247d7beb1fea72df0d91cfd653dfb016b2d43deff299c3e7439baac984000
+
+artifact SHA256:
+10c2b8e3c60ba4e618c6709397c097694255ed7b0174bcdbd1d968e09645c594
+
+Build ID:
+671730ac4ee16633a317409cd1e9c552b19baca3
+
+runsheet SHA256 before this checkpoint:
+5f3c4cc7e2be337018d72c0d3e670adceed889a3849d049cf2909b6ab3646014
+```
+
+### Exact current PalServer ELF identity
+
+Authoritative installed binary:
+
+```text
+/mnt/disk1/Servers/Palworld/Pal/Binaries/Linux/PalServer-Linux-Shipping
+```
+
+Exact identity:
+
+```text
+SHA256:
+c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e
+
+size:
+196297880 bytes
+
+ELF Build ID:
+787f7f8c15edb8fb
+
+format:
+ELF 64-bit LSB executable, x86-64, dynamically linked, stripped
+```
+
+R3 verified the same SHA256 from all three views:
+
+```text
+host installed file:
+c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e
+
+production-container mounted file:
+c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e
+
+temporary dev-container copy:
+c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e
+```
+
+The temporary dev copy was used only for static ELF tooling and was checked
+again during the final immutability audit.
+
+### R1 and R2 wrapper failures
+
+R1 likely terminated in a `readelf | awk ... exit` pipeline under
+`set -o pipefail`.
+
+R2 instrumented the identity block and proved the actual environmental problem:
+
+```text
+readelf: command not found
+IDENTITY_STEP=READELF_NOTES failed rc=127
+```
+
+on the Unraid host.
+
+R3 corrected the tool boundary:
+
+```text
+host:
+SHA256 + stat only
+
+production container:
+independent SHA256
+
+palworld-mod-dev:
+exact copied ELF SHA verification
+readelf
+objdump
+file
+```
+
+No host package installation was performed.
+
+### Offline scanner ABI — proven
+
+Pinned `patternsleuth_bind` gitlink:
+
+```text
+ec72ebac946e0237811a8d1a240cf48bde10b590
+```
+
+The exact source exposes:
+
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn ps_scan_file_ue4ss(
+    path: *const c_char,
+    results: *mut PsFileResolutionResults,
+) -> bool
+```
+
+The result structure is `#[repr(C)]`:
+
+```rust
+pub struct PsEngineVersion {
+    major: u16,
+    minor: u16,
+}
+
+pub struct PsFileResolutionResults {
+    engine_version: PsEngineVersion,
+    guobject_array: u64,
+    fname_tostring: u64,
+    fname_ctor_wchar: u64,
+    gmalloc: u64,
+    static_construct_object_internal: u64,
+    ftext_fstring: u64,
+    fuobject_hash_tables_get: u64,
+    gnatives: u64,
+    console_manager_singleton: u64,
+    gameengine_tick: u64,
+}
+```
+
+The pinned repository already contains the matching C++ declaration and
+consumer in:
+
+```text
+tests/PalworldSignatureTests.cpp
+```
+
+with:
+
+```cpp
+extern "C" bool ps_scan_file_ue4ss(
+    const char* path,
+    PsFileResolutionResults* results
+);
+```
+
+Therefore a future offline invocation does not require inventing a ctypes ABI.
+
+The accepted `libUE4SS.so` exports:
+
+```text
+ps_scan
+ps_scan_file_ue4ss
+```
+
+### Offline scan implementation
+
+The pinned implementation performs:
+
+```rust
+let data = std::fs::read(path)?;
+let image = Image::read(None, &data, Some(path), false)?;
+let resolution = image.resolve(UE4SSResolution::resolver())?;
+```
+
+and copies the resolver `u64` values directly into `PsFileResolutionResults`.
+
+The existing Palworld signature test requires:
+
+```text
+engine version = 5.1
+FNameToString != 0
+FNameCtorWchar != 0
+```
+
+alongside the other required UE4SS resolvers.
+
+### Address interpretation boundary
+
+Stage 4d.8g intentionally did not invoke the offline scanner, so the exact
+numeric `fname_tostring` value for the current PalServer is not yet available.
+
+Do not assume RVA versus ELF virtual address by convention.
+
+The next stage must validate returned-address semantics against the exact ELF:
+
+```text
+scanner result
+    ->
+must fall inside a valid executable PT_LOAD virtual-address range
+    ->
+objdump --start-address at the same value must resolve real instructions
+```
+
+If that validation fails, stop rather than applying guessed base arithmetic.
+
+### Final immutability
+
+R3 final audit confirmed:
+
+```text
+HEAD / origin unchanged
+working tree clean
+accepted Linux source unchanged
+accepted runsheet unchanged
+accepted artifact unchanged
+
+PalServer SHA256 unchanged:
+c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e
+
+isolated server:
+stopped
+
+production PID:
+83
+
+production StartedAt:
+2026-08-08T18:30:02.661576192Z
+
+production RestartCount:
+0
+```
+
+### Accepted engineering conclusion
+
+```text
+current PalServer identity:
+PROVEN
+
+offline scanner C ABI:
+PROVEN
+
+matching pinned C++ consumer:
+PROVEN
+
+ps_scan_file_ue4ss export:
+PROVEN
+
+offline scan invocation:
+NOT YET PERFORMED
+
+current PalServer FNameToString address:
+NOT YET RESOLVED
+
+FName execution:
+0
+```
+
+---
+
+## 62. Immediate next action
+
+Run Stage 4d.8h:
+
+```text
+offline PalServer FName resolver + bounded disassembly
 ```
 
 No PalServer runtime.
 
 Required work:
 
-1. Read/copy the installed PalServer ELF without modifying production.
-2. Record exact PalServer binary SHA256 and ELF Build ID.
-3. Use the already-exported `ps_scan_file_ue4ss` offline API against that ELF to
-   obtain:
-   - engine version;
-   - resolved FName ToString address;
-   - resolved FName constructor address;
-   - other existing UE4SS resolution fields for provenance.
-4. Confirm all returned addresses are file/image-relative or virtual-address
-   values according to the pinned offline scanner ABI.
-5. Disassemble a bounded range around the exact FName ToString implementation.
-6. Trace the code path from the FName comparison/display index to:
-   - global name storage reference;
-   - block selection;
-   - entry offset;
-   - entry header;
-   - width flag;
-   - length;
-   - character bytes.
-7. Capture any helper functions called by FName ToString and recurse only into
-   bounded directly-called helpers required for name decoding.
-8. Do not execute FName ToString.
-9. Do not start PalServer.
-10. Do not mutate production or accepted source.
-11. Do not assume generic UE FNamePool layout when the binary can prove it.
-12. If an exact decoder layout can be recovered from current PalServer code,
-    design a one-name read-only runtime probe using that exact layout.
-13. If the decoder remains ambiguous, stop static and classify incomplete.
-14. Keep broad `FindAllOf("PalItemContainer")` blocked.
-15. Practical transport acceptance later still requires post-startup same-guild
-    base creation and actual expanded registration execution.
+1. Re-verify the exact PalServer SHA256:
+   `c508a28b06cebf0752296b38da5244c08a5688da44dad8f816eb2d726d82699e`.
+2. Copy the exact ELF into `palworld-mod-dev` and re-verify its SHA.
+3. Use the pinned C++ `PsFileResolutionResults` ABI, preferably by compiling a
+   tiny offline helper from the repository's existing
+   `PalworldSignatureTests.cpp` contract rather than using ctypes.
+4. Link only against the accepted/pinned `libUE4SS.so`.
+5. Invoke `ps_scan_file_ue4ss` exactly once on the copied ELF.
+6. Record every returned field, including engine version and
+   `fname_tostring`.
+7. Require engine version `5.1` as the pinned test does.
+8. Require `fname_tostring != 0`.
+9. Validate `fname_tostring` against the exact ELF executable PT_LOAD ranges.
+10. Require direct `objdump` disassembly at the returned address to produce
+    instructions.
+11. Only then classify the returned value as an ELF virtual address.
+12. Disassemble a bounded window around FNameToString.
+13. Record direct call targets and RIP-relative global references.
+14. Recurse only into bounded directly-called helpers necessary to understand
+    name-index decoding.
+15. Do not execute PalServer or FNameToString.
+16. Do not modify the accepted mod source.
+17. If the code path proves block/index/header/length/width/character layout,
+    design a separate one-name read-only runtime probe.
+18. If any decoder field remains ambiguous, stop as static incomplete.
+19. Keep `FName::ToString()` runtime invocation blocked.
+20. Keep broad `FindAllOf("PalItemContainer")` blocked.
