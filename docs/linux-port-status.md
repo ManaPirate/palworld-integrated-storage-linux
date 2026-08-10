@@ -178,17 +178,19 @@ doesn't crash immediately — it's detected on a later, unrelated
 allocation/reallocation, which is why every prior stage crashed shortly
 *after* a correct decode rather than during the call itself.
 
-**Practical implication:** `FName::ToString()` can potentially be used in
-production for the `ISREQ`/`IS1` wire transport's item-name serialization,
-as long as the mod never lets a `ToString()` result destruct normally.
-The planned design is leak-and-cache: call `ToString()` once per unique
-FName (keyed by raw `comparison_index`/`number` bytes, the same key already
-used for the transport pool), copy the needed character data out into a
-plain `std::string` (safely destructible — it uses the mod's own libstdc++
-allocator, not `FMemory`), and leak the original `ToString()` result
-deliberately (never destruct it). Item names are a small bounded set (272
-unique items observed in the test guild's pool), so the leaked footprint
-is negligible and bounded for the life of the server process.
+**Practical implication:** `FName::ToString()` can be used in production for
+the `ISREQ`/`IS1` wire transport's item-name serialization, as long as the
+mod never lets a `ToString()` result destruct normally. Stage 4D.9g (§9)
+implemented this: `resolve_transport_item_name()` calls `ToString()` once
+per unique FName (keyed by the same raw 8-byte `TransportItemNameKey` bytes
+already used for the transport pool), copies the character data out into a
+cached plain `std::string` (safely destructible — it uses the mod's own
+libstdc++ allocator, not `FMemory`), and leaks the original `ToString()`
+result deliberately (never destructs it). Item names are a small bounded
+set (272 unique items observed in the test guild's pool), so the leaked
+footprint is negligible and bounded for the life of the server process.
+`TRANSPORT_POOL_ITEM` log lines now report the resolved name alongside the
+raw hex key.
 
 **Proven (as of 4D.9e/4D.9f):** reading character data out of a leaked,
 never-destructed `ToString()` result — via `RC::to_string()` — is safe,
@@ -232,7 +234,7 @@ numeric suffix, not just the base name.
 1. Direct `ItemContainerMap_InServer` manager-map inspection — allocator corruption.
 2. Broad reflected graph / `TFieldRange` traversal — allocator corruption.
 3. Bulk `FindAllOf("PalItemContainer")` — allocator corruption.
-4. `FName::ToString()` **destructed normally** / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode, triggered by the result's destructor. `ToString()` with the result deliberately leaked (never destructed) — including reading its character data via `RC::to_string()`, single-shot and under sustained per-tick production load — is proven safe (Stage 4D.9d/4D.9e/4D.9f, §5) and is no longer blocked.
+4. `FName::ToString()` **destructed normally** / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode, triggered by the result's destructor. `ToString()` with the result deliberately leaked (never destructed) — including reading its character data via `RC::to_string()`, single-shot and under sustained per-tick production load — is proven safe (Stage 4D.9d/4D.9e/4D.9f, §5), no longer blocked, and now implemented in production as `resolve_transport_item_name()` (Stage 4D.9g, §9).
 5. Selected-chest property guesses, fixed accessor guesses — exhausted negative.
 6. Standalone registration does not prove membership transition.
 7. `OnReadyItemContainerGuildChest`, `OnUpdateItemContainerModule`, `OnUpdateItemContainer` transition paths — all negative.
@@ -280,32 +282,23 @@ runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/s
 
 ## 8. Immediate next action
 
-Stages 4D.9d/4D.9e/4D.9f proved the `FMallocBinned2` corruption comes from
-destructing `ToString()`'s result inside `main.so`, not from calling
-`ToString()` itself, and that leaking the result — including reading its
-character data via `RC::to_string()`, both single-shot and under a
-~121,000-cycle sustained per-tick production run — is safe (§5).
-Leak-and-cache is cleared for production implementation; the diagnostic
-phase is complete.
+Stage 4D.9g (§9) implemented the production leak-and-cache helper
+(`resolve_transport_item_name()`) and retired the diagnostic-only 4D.9a-4D.9f
+probes from the runtime build — leak-and-cache is no longer just proven
+safe, it is now live: `TRANSPORT_POOL_ITEM` log lines report resolved item
+names instead of raw hex keys.
 
-1. Implement the production leak-and-cache helper: one leaked `ToString()`
-   call per unique FName (keyed by raw `comparison_index`/`number` bytes),
-   character data copied into a cached plain `std::string`, for use in the
-   `IS1|id:cnt,...` wire transport reply (§4).
-2. Implement the server-side `ISREQ`/`IS1` wire handler itself (§4): resolve
+1. Implement the server-side `ISREQ`/`IS1` wire handler itself (§4): resolve
    requester camp → guild → aggregate same-guild storage excluding the
-   requester's own camp → serialize item IDs via the leak-and-cache helper
-   from step 1 → send the `IS1|...` reply.
-3. Validate end-to-end against a real Windows client, not just server logs —
+   requester's own camp → serialize item IDs via `resolve_transport_item_name()`
+   → send the `IS1|...` reply.
+2. Validate end-to-end against a real Windows client, not just server logs —
    4d.7b showed server-side registration alone doesn't surface the wider
    pool to a real client without the actual wire transport (§3 known gap).
-4. Independently of FName serialization: still need a periodic/topology-aware
+3. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap) — the executor is one-shot,
    and 4d.7b proved it misses camps created after server startup (20→21
    storages, plan never re-applied).
-5. Retire the diagnostic-only probes (4D.9a-4D.9f) from the runtime build
-   once the production helper (step 1) replaces them, so production doesn't
-   keep carrying dead per-tick leak/log code.
 
 Stage 4d.8h scope (fallback, not currently the priority): offline PalServer
 FName resolver + bounded disassembly. Re-verify PalServer SHA256, copy into
@@ -327,6 +320,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| 4D.9g | Accepted production implementation. Replaced the diagnostic-only 4D.9a-4D.9f probes (and their arm-file gating, attempt-flags, and per-tick leak/log globals) with a permanent `resolve_transport_item_name()` leak-and-cache helper, deduplicated by raw `TransportItemNameKey` bytes. Wired into the transport pool's `TRANSPORT_POOL_ITEM` log line, which now reports the resolved item name alongside the raw hex key. Closes §8 steps 1 and 5 from the prior entry. |
 | 4D.9f | Accepted production diagnostic. Repeating per-tick leak-and-read probe deployed to production, monitored 2+ continuous hours in one uninterrupted boot (~121,000 leak/read cycles), zero crashes. RSS delta grew ~1.45GB→~1.57GB over the window (~60MB/hour, roughly linear), fully absorbed by the existing daily restart. Confirms leak-and-cache is production-safe at sustained worst-case frequency (§5, §8). |
 | 4D.9e | Accepted diagnostic, conclusive. Reads character data (`RC::to_string()`) off the same leaked/undestructed result as 4D.9d, still never destructing it. `RESULT=PASS` — closes the gap 4D.9d left open; character-data reads are safe, not just `.size()` (§5). |
 | 4D.9d | Accepted diagnostic, conclusive, supersedes 4D.9c's "dead end" framing. Same pool-sourced `ToString()` call as 4D.9c, but the result is placement-constructed into a static buffer and its destructor is deliberately never run. Server ran 283+ further ticks with zero crashes. Proves the corruption is in the result's destructor/deallocation path, not in `ToString()` itself — leak-and-cache is now a viable production path (§5, §8). |
