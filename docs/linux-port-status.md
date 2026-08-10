@@ -82,9 +82,11 @@ still required.
 is insufficient for a real Windows client — the client only shows Guild
 Chest resources it already understands; it never surfaces the wider
 same-guild material pool without the actual upstream wire transport
-(`ISREQ`/`IS1`, below).
+(`ISREQ`/`IS1`, below). Stage 4E.1 (§9) implemented the server side of
+this transport; it has not yet been validated against a real Windows
+client (§8 item 2).
 
-## 4. Transport wire protocol (upstream, not yet implemented server-side)
+## 4. Transport wire protocol (Stage 4E.1: server side implemented)
 
 ```text
 client -> server:  PalPlayerController:Debug_CheatCommand_ToServer(FString), NetServer reliable
@@ -99,8 +101,35 @@ server -> client:  PalPlayerController:Debug_ReceiveCheatCommand_ToClient(FStrin
 Server side needs to: resolve the requester camp → resolve its guild →
 aggregate same-guild storage excluding the requester's own camp → serialize
 item IDs as strings (FName indices are process-local, can't cross the wire
-as raw indices) → send `IS1|...` reply. This is currently blocked entirely
-on the FName-stringification problem below.
+as raw indices) → send `IS1|...` reply. This was blocked entirely on the
+FName-stringification problem below until Stage 4D.9g (§9) cleared it.
+
+**Stage 4E.1 implementation (§9):** the request is parsed and queued by a
+new `UObjectGlobals::RegisterHook` on
+`/Script/Pal.PalPlayerController:Debug_CheatCommand_ToServer` — the hook
+callback itself does nothing but parse the FString and enqueue a
+`{controller, requester_camp_id}` record, deliberately avoiding any
+reflection/`FindAllOf`/`ProcessEvent` work inside a call context
+(RPC dispatch) this mod has never exercised before. The actual pool build
+and reply happen on the next `on_engine_tick` (the same proven-safe
+context `run_read_only_chest_association` already uses hundreds of times
+per discovery pass), against a `{camp id → camp, camp → guild,
+guild → RegistrationPlanGuild}` snapshot cached at the end of the most
+recent discovery pass (refreshed every `DiscoveryInterval`, cleared on
+world change). The pool walk itself
+(`build_transport_pool_for_request`) is a standalone duplicate of the
+accepted §3 bounded planner-selected-chest walk — not a refactor of the
+existing diagnostic probe — so this new path can never change the
+already-proven probe's behavior. The outbound `IS1|...` reply is built as
+a plain `std::string`, widened into a deliberately-leaked (never freed)
+raw `TCHAR` buffer, and handed to `ProcessEvent` as a raw
+`{data,num,max}` triple — no `RC::Unreal::FString` object is ever
+constructed for the reply, so no engine-owned destructor for it can ever
+run inside `main.so` (same leak-and-never-destruct rationale as §5's
+`resolve_transport_item_name()`, applied to the one other place this mod
+hands an Unreal-visible string-shaped buffer back to the engine).
+Not yet build-verified or runtime-tested (§8 item 1 code-complete,
+item 2 pending).
 
 ## 5. FName stringification — current status (Stage 4D.9, this session)
 
@@ -282,19 +311,28 @@ runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/s
 
 ## 8. Immediate next action
 
-Stage 4D.9g (§9) implemented the production leak-and-cache helper
-(`resolve_transport_item_name()`) and retired the diagnostic-only 4D.9a-4D.9f
-probes from the runtime build — leak-and-cache is no longer just proven
-safe, it is now live: `TRANSPORT_POOL_ITEM` log lines report resolved item
-names instead of raw hex keys.
+Stage 4E.1 (§9) implemented the server-side `ISREQ`/`IS1` wire handler
+(§4): a `Debug_CheatCommand_ToServer` hook queues parsed requests,
+`on_engine_tick` drains the queue against a cached registration-plan
+snapshot, builds the guild-minus-own-camp pool via a standalone bounded
+walk, and replies with a leaked raw-buffer `IS1|...` FString. This is
+code-complete but has not been built or runtime-tested yet.
 
-1. Implement the server-side `ISREQ`/`IS1` wire handler itself (§4): resolve
-   requester camp → guild → aggregate same-guild storage excluding the
-   requester's own camp → serialize item IDs via `resolve_transport_item_name()`
-   → send the `IS1|...` reply.
+1. Build, deploy, and monitor Stage 4E.1 the same way as every prior
+   stage (dev container build → isolated test server → log monitoring)
+   before trusting it. Specifically watch for: `TRANSPORT_HOOK
+   registered=1` at startup, `TRANSPORT_CACHE camps=N guilds=N` each
+   discovery pass, and — once a real client sends a request —
+   `TRANSPORT_REQUEST queued=1` followed by `TRANSPORT_REQUEST
+   RESULT=SENT items=N len=N` with zero crashes.
 2. Validate end-to-end against a real Windows client, not just server logs —
    4d.7b showed server-side registration alone doesn't surface the wider
    pool to a real client without the actual wire transport (§3 known gap).
+   This also validates the two biggest unproven assumptions in Stage
+   4E.1: that `UObjectGlobals::RegisterHook` on an incoming server RPC is
+   a safe call context for this mod, and that a raw leaked-buffer
+   `RawTArray` (never an `RC::Unreal::FString`) is accepted by
+   `ProcessEvent` as a valid outbound FString parameter.
 3. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap) — the executor is one-shot,
    and 4d.7b proved it misses camps created after server startup (20→21
@@ -320,6 +358,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| 4E.1 | Implemented, not yet build-verified or runtime-tested. Server-side `ISREQ`/`IS1` wire handler (§4): `RegisterHook` on `Debug_CheatCommand_ToServer` parses and queues requests; `on_engine_tick` drains the queue every tick against a registration-plan snapshot cached at the end of each discovery pass (cleared on world change); pool build is a standalone duplicate of the accepted §3 bounded chest walk (`build_transport_pool_for_request`), never a refactor of the existing diagnostic probe; reply is sent as a deliberately-leaked raw `TCHAR` buffer (never an `RC::Unreal::FString`) via `ProcessEvent`, applying the same leak-and-never-destruct rationale as `resolve_transport_item_name()` (§5) to the outbound direction. Closes §8 item 1 code-wise; §8 items 2-3 remain. |
 | 4D.9g | Accepted production implementation. Replaced the diagnostic-only 4D.9a-4D.9f probes (and their arm-file gating, attempt-flags, and per-tick leak/log globals) with a permanent `resolve_transport_item_name()` leak-and-cache helper, deduplicated by raw `TransportItemNameKey` bytes. Wired into the transport pool's `TRANSPORT_POOL_ITEM` log line, which now reports the resolved item name alongside the raw hex key. Closes §8 steps 1 and 5 from the prior entry. |
 | 4D.9f | Accepted production diagnostic. Repeating per-tick leak-and-read probe deployed to production, monitored 2+ continuous hours in one uninterrupted boot (~121,000 leak/read cycles), zero crashes. RSS delta grew ~1.45GB→~1.57GB over the window (~60MB/hour, roughly linear), fully absorbed by the existing daily restart. Confirms leak-and-cache is production-safe at sustained worst-case frequency (§5, §8). |
 | 4D.9e | Accepted diagnostic, conclusive. Reads character data (`RC::to_string()`) off the same leaked/undestructed result as 4D.9d, still never destructing it. `RESULT=PASS` — closes the gap 4D.9d left open; character-data reads are safe, not just `.size()` (§5). |

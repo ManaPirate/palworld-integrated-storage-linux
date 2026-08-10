@@ -46,6 +46,7 @@
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
 #include <Unreal/Hooks/Hooks.hpp>
+#include <Unreal/UFunctionStructs.hpp>
 #include <algorithm>
 #include <atomic>
 #include <dlfcn.h>
@@ -343,6 +344,51 @@ namespace
 
     std::uint64_t g_discovery_runs{};
 
+    // Transport wire protocol (ISREQ/IS1, docs/linux-port-status.md §4).
+    //
+    // The request hook (registered in on_unreal_init) only parses the
+    // incoming FString and enqueues a lightweight record — it never
+    // touches reflection, FindAllOf or ProcessEvent itself, since RPC
+    // dispatch is a new, previously-untested call context for this mod.
+    // Actual pool-building and the reply happen on the next engine tick
+    // (proven-safe context, same one run_read_only_chest_association
+    // already uses hundreds of times per discovery pass), using a
+    // snapshot of the registration plan cached at the end of the most
+    // recent discovery pass.
+    struct PendingTransportRequest
+    {
+        RC::Unreal::UObject* controller{};
+        GuildKey requester_camp_id{};
+    };
+
+    constexpr std::size_t MaxPendingTransportRequests = 64;
+
+    std::vector<PendingTransportRequest>
+        g_pending_transport_requests{};
+
+    std::atomic_bool g_transport_hook_registered{false};
+    std::atomic_bool g_transport_mod_shutting_down{false};
+    std::atomic_uint64_t g_transport_request_hook_fires{0};
+
+    bool g_cached_registration_plan_valid{false};
+
+    std::unordered_map<
+        GuildKey,
+        RegistrationPlanGuild,
+        GuildKeyHash
+    > g_cached_registration_plan{};
+
+    std::unordered_map<
+        GuildKey,
+        RC::Unreal::UObject*,
+        GuildKeyHash
+    > g_cached_camp_id_to_camp{};
+
+    std::unordered_map<
+        RC::Unreal::UObject*,
+        GuildKey
+    > g_cached_camp_to_guild{};
+
     template <std::size_t Size>
     auto emit_marker(const char (&message)[Size]) noexcept -> void
     {
@@ -519,6 +565,198 @@ namespace
         );
 
         return true;
+    }
+
+    // Mirrors copy_guild_key exactly, reading a camp's own ID (FGuid)
+    // instead of its GroupIdBelongTo. Same lightweight accessor already
+    // trusted by production code (copy_guild_key feeds the accepted
+    // registration executor, not just diagnostics).
+    auto copy_camp_id(
+        RC::Unreal::UObject* camp,
+        GuildKey& output
+    ) -> bool
+    {
+        if (camp == nullptr)
+        {
+            return false;
+        }
+
+        const auto* property_value =
+            camp->GetValuePtrByPropertyNameInChain(
+                STR("ID")
+            );
+
+        if (property_value == nullptr)
+        {
+            return false;
+        }
+
+        std::memcpy(
+            output.data(),
+            property_value,
+            output.size()
+        );
+
+        return true;
+    }
+
+    constexpr char TransportRequestSentinel[] = "ISREQ|";
+
+    constexpr std::size_t TransportRequestSentinelLength =
+        sizeof(TransportRequestSentinel) - 1;
+
+    constexpr std::size_t TransportGuidHexLength = 32;
+
+    // Inverse of guid_to_hex: same byte order (byte i -> hex chars at
+    // 2*i, 2*i+1), so this round-trips exactly with what the client
+    // read from its own camp GUID and hex-encoded.
+    auto parse_transport_request_guid(
+        const std::string& text,
+        GuildKey& output
+    ) noexcept -> bool
+    {
+        if (
+            text.size() !=
+                TransportRequestSentinelLength +
+                    TransportGuidHexLength ||
+            text.compare(
+                0,
+                TransportRequestSentinelLength,
+                TransportRequestSentinel
+            ) != 0
+        )
+        {
+            return false;
+        }
+
+        const auto hex_value = [](char c) noexcept -> int
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+
+        for (
+            std::size_t index = 0;
+            index < output.size();
+            ++index
+        )
+        {
+            const auto high = hex_value(
+                text[
+                    TransportRequestSentinelLength +
+                        index * 2
+                ]
+            );
+
+            const auto low = hex_value(
+                text[
+                    TransportRequestSentinelLength +
+                        index * 2 + 1
+                ]
+            );
+
+            if (high < 0 || low < 0)
+            {
+                return false;
+            }
+
+            output[index] =
+                static_cast<std::uint8_t>(
+                    (high << 4) | low
+                );
+        }
+
+        return true;
+    }
+
+    // Reads an incoming FString's raw TArray<TCHAR> as plain ASCII. Pure
+    // read of memory the engine already owns (same class of access as
+    // every other reflected property read in this file) — no Unreal
+    // object is constructed or destructed here, so none of the §5
+    // FMallocBinned2 destructor risk applies.
+    auto ascii_narrow(const RawTArray& array) -> std::string
+    {
+        if (array.data == nullptr || array.num <= 0)
+        {
+            return {};
+        }
+
+        const auto* chars =
+            reinterpret_cast<const RC::Unreal::TCHAR*>(
+                array.data
+            );
+
+        std::string result{};
+        result.reserve(static_cast<std::size_t>(array.num));
+
+        for (
+            std::int32_t index{};
+            index < array.num;
+            ++index
+        )
+        {
+            const auto code_point =
+                static_cast<std::uint32_t>(chars[index]);
+
+            if (code_point == 0)
+            {
+                break;
+            }
+
+            if (code_point > 0x7f)
+            {
+                // Our wire payloads are pure ASCII by construction;
+                // anything else can't be our sentinel.
+                return {};
+            }
+
+            result.push_back(
+                static_cast<char>(code_point)
+            );
+        }
+
+        return result;
+    }
+
+    // Builds a raw TCHAR buffer + RawTArray for an outbound FString
+    // parameter, deliberately leaked (never freed) so no destructor for
+    // it ever runs inside main.so — the same leak-and-never-destruct
+    // shape Stage 4D.9d-4D.9g proved safe for FName::ToString() results,
+    // applied here to the one other place this mod hands an
+    // Unreal-visible string-shaped buffer back to the engine. The
+    // buffer itself is plain heap memory from the mod's own libstdc++
+    // allocator (new[]), never an Unreal FString — its construction path
+    // never touches FMemory, only its consumption (ProcessEvent copying
+    // out of it) does.
+    auto ascii_widen_leaked(const std::string& text) -> RawTArray
+    {
+        const auto length = text.size();
+
+        auto* buffer = new RC::Unreal::TCHAR[length + 1];
+
+        for (std::size_t index{}; index < length; ++index)
+        {
+            buffer[index] =
+                static_cast<RC::Unreal::TCHAR>(
+                    static_cast<unsigned char>(text[index])
+                );
+        }
+
+        buffer[length] = static_cast<RC::Unreal::TCHAR>(0);
+
+        RawTArray result{};
+
+        result.data =
+            reinterpret_cast<std::uint8_t*>(buffer);
+
+        result.num =
+            static_cast<std::int32_t>(length + 1);
+
+        result.max = result.num;
+
+        return result;
     }
 
     auto find_storage_module(RC::Unreal::UObject* camp)
@@ -810,6 +1048,12 @@ namespace
             false,
             std::memory_order_release
         );
+
+        g_pending_transport_requests.clear();
+        g_cached_registration_plan.clear();
+        g_cached_camp_id_to_camp.clear();
+        g_cached_camp_to_guild.clear();
+        g_cached_registration_plan_valid = false;
 
         emit_marker(
             "[ModIntegratedStorageCpp] WORLD state reset"
@@ -1364,6 +1608,722 @@ namespace
         {
             return empty_name;
         }
+    }
+
+
+    // Transport wire protocol pool builder. Deliberately a standalone
+    // function rather than a refactor of the accepted diagnostic probe
+    // below (run_read_only_transport_metadata_probe) — same bounded
+    // planner-selected-chest walk, same accepted §3 shape, but kept
+    // separate so this new, previously-untested call path can never
+    // change the already-proven-in-production probe's behavior.
+    struct TransportItemIdLayout
+    {
+        RC::Unreal::UScriptStruct* known_item_id{};
+        RC::Unreal::FProperty* static_id_property{};
+        bool ok{};
+    };
+
+    auto get_transport_item_id_layout()
+        -> const TransportItemIdLayout&
+    {
+        static TransportItemIdLayout layout{};
+        static bool resolved{};
+
+        if (!resolved)
+        {
+            resolved = true;
+
+            layout.known_item_id =
+                RC::Unreal::UObjectGlobals::StaticFindObject<
+                    RC::Unreal::UScriptStruct*
+                >(
+                    nullptr,
+                    nullptr,
+                    STR("/Script/Pal.PalItemId")
+                );
+
+            layout.static_id_property =
+                layout.known_item_id != nullptr
+                    ? layout.known_item_id->
+                        GetPropertyByNameInChain(
+                            STR("StaticId")
+                        )
+                    : nullptr;
+
+            auto* static_id_name_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FNameProperty
+                >(layout.static_id_property);
+
+            layout.ok =
+                layout.known_item_id != nullptr &&
+                layout.known_item_id->
+                    GetPropertiesSize() == 40 &&
+                static_id_name_property != nullptr &&
+                layout.static_id_property->
+                    GetOffset_Internal() == 0 &&
+                layout.static_id_property->
+                    GetSize() == 8;
+        }
+
+        return layout;
+    }
+
+    struct TransportContainerManager
+    {
+        RC::Unreal::UObject* manager{};
+        RC::Unreal::UFunction* get_container_function{};
+        bool ok{};
+    };
+
+    auto get_transport_container_manager()
+        -> TransportContainerManager
+    {
+        std::vector<RC::Unreal::UObject*> managers{};
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalItemContainerManager"),
+            managers
+        );
+
+        TransportContainerManager result{};
+        std::size_t nonnull_managers{};
+
+        for (auto* candidate : managers)
+        {
+            if (candidate == nullptr)
+            {
+                continue;
+            }
+
+            ++nonnull_managers;
+
+            if (result.manager == nullptr)
+            {
+                result.manager = candidate;
+            }
+        }
+
+        result.get_container_function =
+            result.manager != nullptr
+                ? result.manager->
+                    GetFunctionByNameInChain(
+                        STR("GetContainer")
+                    )
+                : nullptr;
+
+        result.ok =
+            managers.size() == 1 &&
+            nonnull_managers == 1 &&
+            result.manager != nullptr &&
+            result.get_container_function !=
+                nullptr &&
+            result.get_container_function->
+                GetParmsSize() == 24;
+
+        return result;
+    }
+
+    // Bounded planner-selected chest walk: identical shape to §3's
+    // accepted transport pool (every foreign same-guild chest ->
+    // module -> container-id -> container-manager -> reflected slot
+    // array), just parameterized by an arbitrary requester camp instead
+    // of the diagnostic probe's fixed "first candidate" selection.
+    // Never touches ItemContainerMap_InServer, never bulk-enumerates
+    // PalItemContainer — both remain blocked (§6 items 1 and 3).
+    auto build_transport_pool_for_request(
+        const RegistrationPlanGuild& guild_plan,
+        RC::Unreal::UObject* requester_camp
+    ) -> std::vector<
+        std::pair<TransportItemNameKey, std::int64_t>
+    >
+    {
+        std::vector<
+            std::pair<TransportItemNameKey, std::int64_t>
+        > ordered_pool{};
+
+        const auto& item_layout =
+            get_transport_item_id_layout();
+
+        if (!item_layout.ok)
+        {
+            return ordered_pool;
+        }
+
+        const auto manager =
+            get_transport_container_manager();
+
+        if (!manager.ok)
+        {
+            return ordered_pool;
+        }
+
+        std::unordered_map<
+            TransportItemNameKey,
+            std::int64_t,
+            TransportItemNameKeyHash
+        > pool{};
+
+        for (
+            const auto& [chest, chest_camp] :
+                guild_plan.chest_camps
+        )
+        {
+            if (
+                chest == nullptr ||
+                chest_camp == nullptr ||
+                chest_camp == requester_camp
+            )
+            {
+                continue;
+            }
+
+            try
+            {
+                auto* module_function =
+                    chest->GetFunctionByNameInChain(
+                        STR("GetItemContainerModule")
+                    );
+
+                if (
+                    module_function == nullptr ||
+                    module_function->
+                        GetParmsSize() != 8
+                )
+                {
+                    continue;
+                }
+
+                std::array<std::byte, 8>
+                    module_buffer{};
+
+                chest->ProcessEvent(
+                    module_function,
+                    module_buffer.data()
+                );
+
+                RC::Unreal::UObject* module{};
+
+                std::memcpy(
+                    &module,
+                    module_buffer.data(),
+                    sizeof(module)
+                );
+
+                if (module == nullptr)
+                {
+                    continue;
+                }
+
+                auto* id_function =
+                    module->GetFunctionByNameInChain(
+                        STR("GetContainerId")
+                    );
+
+                if (
+                    id_function == nullptr ||
+                    id_function->
+                        GetParmsSize() != 16
+                )
+                {
+                    continue;
+                }
+
+                std::array<std::byte, 16> id_buffer{};
+
+                module->ProcessEvent(
+                    id_function,
+                    id_buffer.data()
+                );
+
+                GuildKey container_id{};
+
+                std::memcpy(
+                    container_id.data(),
+                    id_buffer.data(),
+                    container_id.size()
+                );
+
+                if (guid_is_zero(container_id))
+                {
+                    continue;
+                }
+
+                std::array<std::byte, 24> get_buffer{};
+
+                std::memcpy(
+                    get_buffer.data(),
+                    container_id.data(),
+                    container_id.size()
+                );
+
+                manager.manager->ProcessEvent(
+                    manager.get_container_function,
+                    get_buffer.data()
+                );
+
+                RC::Unreal::UObject* container{};
+
+                std::memcpy(
+                    &container,
+                    get_buffer.data() + 16,
+                    sizeof(container)
+                );
+
+                if (container == nullptr)
+                {
+                    continue;
+                }
+
+                auto* slot_property =
+                    container->
+                        GetPropertyByNameInChain(
+                            STR("ItemSlotArray")
+                        );
+
+                auto* array_property =
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(slot_property);
+
+                auto* object_property =
+                    array_property != nullptr
+                        ? RC::Unreal::CastField<
+                            RC::Unreal::
+                                FObjectPropertyBase
+                        >(
+                            array_property->
+                                GetInner()
+                        )
+                        : nullptr;
+
+                if (
+                    array_property == nullptr ||
+                    object_property == nullptr
+                )
+                {
+                    continue;
+                }
+
+                RC::Unreal::
+                    FScriptArrayHelper_InContainer
+                        helper(
+                            array_property,
+                            container
+                        );
+
+                for (
+                    std::int32_t slot_index{};
+                    slot_index < helper.Num();
+                    ++slot_index
+                )
+                {
+                    auto* slot =
+                        object_property->
+                            GetObjectPropertyValue(
+                                helper.GetRawPtr(
+                                    slot_index
+                                )
+                            );
+
+                    if (slot == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* item_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FStructProperty
+                        >(
+                            slot->
+                                GetPropertyByNameInChain(
+                                    STR("ItemId")
+                                )
+                        );
+
+                    auto* stack_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::
+                                FNumericProperty
+                        >(
+                            slot->
+                                GetPropertyByNameInChain(
+                                    STR("StackCount")
+                                )
+                        );
+
+                    if (
+                        item_property == nullptr ||
+                        stack_property == nullptr ||
+                        item_property->
+                            GetStruct().Get() !=
+                            item_layout.
+                                known_item_id ||
+                        item_property->
+                            GetSize() != 40 ||
+                        stack_property->
+                            GetSize() != 4
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* item_data =
+                        item_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(slot);
+
+                    auto* stack_data =
+                        stack_property->
+                            ContainerPtrToValuePtr<
+                                void
+                            >(slot);
+
+                    if (
+                        item_data == nullptr ||
+                        stack_data == nullptr
+                    )
+                    {
+                        continue;
+                    }
+
+                    std::int32_t stack_count{};
+
+                    std::memcpy(
+                        &stack_count,
+                        stack_data,
+                        sizeof(stack_count)
+                    );
+
+                    if (stack_count <= 0)
+                    {
+                        continue;
+                    }
+
+                    TransportItemNameKey
+                        static_name{};
+
+                    std::memcpy(
+                        static_name.data(),
+                        static_cast<
+                            const std::byte*
+                        >(item_data) +
+                            item_layout.
+                                static_id_property->
+                                GetOffset_Internal(),
+                        static_name.size()
+                    );
+
+                    pool[static_name] +=
+                        static_cast<std::int64_t>(
+                            stack_count
+                        );
+                }
+            }
+            catch (...)
+            {
+                continue;
+            }
+        }
+
+        ordered_pool.reserve(pool.size());
+
+        for (const auto& [key, quantity] : pool)
+        {
+            ordered_pool.emplace_back(key, quantity);
+        }
+
+        return ordered_pool;
+    }
+
+    auto build_transport_reply_payload(
+        const std::vector<
+            std::pair<TransportItemNameKey, std::int64_t>
+        >& ordered_pool
+    ) -> std::string
+    {
+        std::string payload = "IS1|";
+
+        for (const auto& [key, quantity] : ordered_pool)
+        {
+            if (quantity <= 0)
+            {
+                continue;
+            }
+
+            const auto& name =
+                resolve_transport_item_name(key);
+
+            if (name.empty())
+            {
+                continue;
+            }
+
+            payload += name;
+            payload += ':';
+            payload += std::to_string(quantity);
+            payload += ',';
+        }
+
+        return payload;
+    }
+
+    auto send_transport_reply(
+        RC::Unreal::UObject* controller,
+        const std::string& payload
+    ) -> bool
+    {
+        if (controller == nullptr)
+        {
+            return false;
+        }
+
+        auto* reply_function =
+            controller->GetFunctionByNameInChain(
+                STR(
+                    "Debug_ReceiveCheatCommand_"
+                    "ToClient"
+                )
+            );
+
+        if (reply_function == nullptr)
+        {
+            return false;
+        }
+
+        struct ReplyParams
+        {
+            RawTArray Message{};
+        };
+
+        ReplyParams params{};
+        params.Message =
+            ascii_widen_leaked(payload);
+
+        controller->ProcessEvent(
+            reply_function,
+            &params
+        );
+
+        return true;
+    }
+
+    auto process_pending_transport_requests() -> void
+    {
+        if (g_pending_transport_requests.empty())
+        {
+            return;
+        }
+
+        auto requests =
+            std::move(g_pending_transport_requests);
+
+        g_pending_transport_requests.clear();
+
+        if (!g_cached_registration_plan_valid)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_REQUEST RESULT=NO_PLAN"
+            );
+
+            return;
+        }
+
+        for (const auto& request : requests)
+        {
+            try
+            {
+                const auto camp_iterator =
+                    g_cached_camp_id_to_camp.find(
+                        request.requester_camp_id
+                    );
+
+                if (
+                    camp_iterator ==
+                        g_cached_camp_id_to_camp.end()
+                )
+                {
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "TRANSPORT_REQUEST "
+                        "RESULT=CAMP_NOT_FOUND"
+                    );
+
+                    continue;
+                }
+
+                auto* requester_camp =
+                    camp_iterator->second;
+
+                const auto guild_iterator =
+                    g_cached_camp_to_guild.find(
+                        requester_camp
+                    );
+
+                if (
+                    guild_iterator ==
+                        g_cached_camp_to_guild.end()
+                )
+                {
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "TRANSPORT_REQUEST "
+                        "RESULT=NO_GUILD"
+                    );
+
+                    continue;
+                }
+
+                const auto plan_iterator =
+                    g_cached_registration_plan.find(
+                        guild_iterator->second
+                    );
+
+                if (
+                    plan_iterator ==
+                        g_cached_registration_plan.
+                            end()
+                )
+                {
+                    emit_marker(
+                        "[ModIntegratedStorageCpp] "
+                        "TRANSPORT_REQUEST "
+                        "RESULT=NO_PLAN_GUILD"
+                    );
+
+                    continue;
+                }
+
+                const auto ordered_pool =
+                    build_transport_pool_for_request(
+                        plan_iterator->second,
+                        requester_camp
+                    );
+
+                const auto payload =
+                    build_transport_reply_payload(
+                        ordered_pool
+                    );
+
+                const bool sent =
+                    send_transport_reply(
+                        request.controller,
+                        payload
+                    );
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_REQUEST RESULT=%s "
+                    "items=%zu len=%zu",
+                    sent ? "SENT" : "SEND_FAILED",
+                    ordered_pool.size(),
+                    payload.size()
+                );
+            }
+            catch (...)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_REQUEST "
+                    "RESULT=EXCEPTION"
+                );
+            }
+        }
+    }
+
+    auto on_transport_request_hook_pre(
+        RC::Unreal::UnrealScriptFunctionCallableContext&,
+        void*
+    ) -> void
+    {
+        g_transport_request_hook_fires.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+    }
+
+    auto on_transport_request_hook_post(
+        RC::Unreal::UnrealScriptFunctionCallableContext&
+            context,
+        void*
+    ) -> void
+    {
+        if (
+            g_transport_mod_shutting_down.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            return;
+        }
+
+        auto* controller = context.Context;
+
+        if (controller == nullptr)
+        {
+            return;
+        }
+
+        struct RequestParams
+        {
+            RawTArray Command{};
+        };
+
+        auto& params =
+            context.GetParams<RequestParams>();
+
+        const auto text =
+            ascii_narrow(params.Command);
+
+        GuildKey requester_camp_id{};
+
+        if (
+            !parse_transport_request_guid(
+                text,
+                requester_camp_id
+            )
+        )
+        {
+            // Not our sentinel -> a genuine cheat command. Its native
+            // handler is inert for non-admins on a dedicated server;
+            // leave it alone.
+            return;
+        }
+
+        if (
+            g_pending_transport_requests.size() >=
+                MaxPendingTransportRequests
+        )
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_REQUEST RESULT=QUEUE_FULL"
+            );
+
+            return;
+        }
+
+        g_pending_transport_requests.push_back(
+            PendingTransportRequest{
+                controller,
+                requester_camp_id
+            }
+        );
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "TRANSPORT_REQUEST queued=%zu",
+            g_pending_transport_requests.size()
+        );
     }
 
 
@@ -13187,6 +14147,82 @@ namespace
             true
         );
 
+        if (plan_complete)
+        {
+            g_cached_registration_plan = registration_plan;
+
+            g_cached_camp_id_to_camp.clear();
+            g_cached_camp_to_guild.clear();
+
+            for (
+                const auto& [cached_guild_key, guild] :
+                    registration_plan
+            )
+            {
+                std::unordered_set<
+                    RC::Unreal::UObject*
+                > guild_camp_set{};
+
+                for (
+                    const auto& [
+                        ignored_storage,
+                        camp
+                    ] : guild.storage_camps
+                )
+                {
+                    static_cast<void>(ignored_storage);
+
+                    if (camp != nullptr)
+                    {
+                        guild_camp_set.insert(camp);
+                    }
+                }
+
+                for (
+                    const auto& [
+                        ignored_chest,
+                        camp
+                    ] : guild.chest_camps
+                )
+                {
+                    static_cast<void>(ignored_chest);
+
+                    if (camp != nullptr)
+                    {
+                        guild_camp_set.insert(camp);
+                    }
+                }
+
+                for (auto* camp : guild_camp_set)
+                {
+                    GuildKey camp_id{};
+
+                    if (
+                        !copy_camp_id(camp, camp_id) ||
+                        guid_is_zero(camp_id)
+                    )
+                    {
+                        continue;
+                    }
+
+                    g_cached_camp_id_to_camp[camp_id] =
+                        camp;
+
+                    g_cached_camp_to_guild[camp] =
+                        cached_guild_key;
+                }
+            }
+
+            g_cached_registration_plan_valid = true;
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "TRANSPORT_CACHE camps=%zu guilds=%zu",
+                g_cached_camp_id_to_camp.size(),
+                g_cached_registration_plan.size()
+            );
+        }
+
         const auto run =
             g_chest_association_runs.fetch_add(
                 1,
@@ -13339,6 +14375,25 @@ namespace
         }
 
         if (
+            g_is_dedicated.load(
+                std::memory_order_acquire
+            ) == 1
+        )
+        {
+            try
+            {
+                process_pending_transport_requests();
+            }
+            catch (...)
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_REQUEST RESULT=EXCEPTION"
+                );
+            }
+        }
+
+        if (
             !g_chest_association_requested.exchange(
                 false,
                 std::memory_order_acq_rel
@@ -13414,6 +14469,11 @@ namespace
 
         ~ModIntegratedStorageCpp() override
         {
+            g_transport_mod_shutting_down.store(
+                true,
+                std::memory_order_release
+            );
+
             g_chest_association_enabled.store(
                 false,
                 std::memory_order_release
@@ -13570,6 +14630,44 @@ namespace
                     "[ModIntegratedStorageCpp] "
                     "ENGINE_TICK registered=%d",
                     registered ? 1 : 0
+                );
+            }
+
+            if (
+                !g_transport_hook_registered.exchange(
+                    true,
+                    std::memory_order_acq_rel
+                )
+            )
+            {
+                bool hook_registered = false;
+
+                try
+                {
+                    RC::Unreal::UObjectGlobals::
+                        RegisterHook(
+                            STR(
+                                "/Script/Pal."
+                                "PalPlayerController:"
+                                "Debug_CheatCommand_"
+                                "ToServer"
+                            ),
+                            &on_transport_request_hook_pre,
+                            &on_transport_request_hook_post,
+                            nullptr
+                        );
+
+                    hook_registered = true;
+                }
+                catch (...)
+                {
+                    hook_registered = false;
+                }
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "TRANSPORT_HOOK registered=%d",
+                    hook_registered ? 1 : 0
                 );
             }
 
