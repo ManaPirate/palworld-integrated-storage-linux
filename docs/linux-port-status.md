@@ -331,33 +331,40 @@ over copying into a live mount.
 ## 8. Immediate next action
 
 Stage 4E.1 (§9) implemented the server-side `ISREQ`/`IS1` wire handler
-(§4): a `Debug_CheatCommand_ToServer` hook queues parsed requests,
-`on_engine_tick` drains the queue against a cached registration-plan
-snapshot, builds the guild-minus-own-camp pool via a standalone bounded
-walk, and replies with a leaked raw-buffer `IS1|...` FString. Stage 4E.2
-(§9) built, deployed, and monitored it — clean startup, clean idle
-operation, and a real vanilla client connecting and playing normally with
-zero disruption and zero `TRANSPORT_REQUEST` fires. The request/reply path
-itself is still unexercised.
+(§4). Stage 4E.2 (§9) confirmed clean build/deploy/idle-operation and
+vanilla-client non-disruption. Stage 4E.3 (§9) then took the **first real
+`ISREQ`** end-to-end and crashed the server — root cause found and fixed:
+`get_transport_container_manager()` used a local (stack) `std::vector` as
+the output parameter to `FindAllOf`, which grows the vector using
+`libUE4SS.so`'s allocator; destroying that vector on function return (every
+request) freed that storage from `main.so`, corrupting `FMallocBinned2`
+bookkeeping — the exact cross-DSO destructor hazard Stage 4a's own
+hardening notes already documented once. Fixed by switching to the same
+process-lifetime heap-vector pattern used at every other `FindAllOf` call
+site in this file. Not yet rebuilt/redeployed/retested (§9 4E.3).
 
 1. ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2. Startup
    and idle-operation markers confirmed clean: `TRANSPORT_HOOK
    registered=1`, `TRANSPORT_CACHE camps=N guilds=N` each discovery pass,
-   zero crashes. Still outstanding: a real `ISREQ` has never been sent, so
-   `TRANSPORT_REQUEST queued=1` / `TRANSPORT_REQUEST RESULT=SENT
-   items=N len=N` remain unverified — needs a client running the upstream
-   Windows mod (item 2).
-2. Validate the actual request/reply round trip against a client running
-   the upstream Windows mod (not just a vanilla connection, which Stage
-   4E.2 already confirmed is safe) — 4d.7b showed server-side registration
-   alone doesn't surface the wider pool to a real client without the
-   actual wire transport (§3 known gap). This also validates the two
-   biggest unproven assumptions in Stage 4E.1: that
-   `UObjectGlobals::RegisterHook` on an incoming server RPC is a safe call
-   context for this mod, and that a raw leaked-buffer `RawTArray` (never
-   an `RC::Unreal::FString`) is accepted by `ProcessEvent` as a valid
-   outbound FString parameter.
-3. Independently of FName serialization: still need a periodic/topology-aware
+   zero crashes.
+2. Rebuild and redeploy the Stage 4E.3 fix, then retry the real-client
+   `ISREQ` test that caught the bug. Watch for `TRANSPORT_REQUEST
+   queued=1` followed by `TRANSPORT_REQUEST RESULT=SENT items=N len=N`
+   with **zero** `FMallocBinned2`/`Signal 11` — the first attempt got
+   `queued=1` and then crashed before `RESULT=SENT` ever printed (§9
+   4E.3). This also validates the two biggest remaining unproven
+   assumptions in Stage 4E.1: that `UObjectGlobals::RegisterHook` on an
+   incoming server RPC is a safe call context for this mod, and that a raw
+   leaked-buffer `RawTArray` (never an `RC::Unreal::FString`) is accepted
+   by `ProcessEvent` as a valid outbound FString parameter.
+3. Separately, client-side: UE4SS itself is currently crashing during the
+   Palworld connection handshake on this tester's Proton setup, independent
+   of this mod (reproduced with the mod's files completely absent, and
+   confirmed present in an upstream GitHub issue — UE4SS-RE/RE-UE4SS#1339,
+   open, no fix, "removing UE4SS stops the issue" is the only known
+   workaround so far). This blocks getting a stable client connected at
+   all, separate from anything fixable in this repo.
+4. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap) — the executor is one-shot,
    and 4d.7b proved it misses camps created after server startup (20→21
    storages, plan never re-applied).
@@ -382,6 +389,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| 4E.3 | Bug found and fixed, not yet rebuilt/retested. First real `ISREQ` from an actual client reached the server (`TRANSPORT_REQUEST queued=1` logged), then the server crashed before replying (`FMallocBinned2 ... canary == 0x0 != 0xb7`, `Signal 11`, matching the exact §5 destructor-crossing-DSO signature). Root cause: `get_transport_container_manager()` passed a local `std::vector` to `FindAllOf`; `FindAllOf` grows that vector via `libUE4SS.so`'s allocator, and destroying it on function return (every request) freed that storage from `main.so` — the identical hazard Stage 4a's hardening notes already documented and fixed everywhere else in this file, missed in this one new function. Fixed by switching to the same process-lifetime heap-vector pattern (`static auto* managers = new std::vector<...>(); managers->clear();`) already used at every other `FindAllOf` call site. Diagnosed via direct binary parsing of the client-side UE4SS minidump (confirmed fault was inside `UE4SS.dll`, unrelated to this bug) plus server-side `docker logs` correlation (confirmed the server-side crash, separate from the client-side UE4SS/Proton connect crash tracked in §8 item 3). |
 | 4E.2 | Accepted runtime verification, partial. Built and deployed Stage 4E.1 to the isolated test server (HEAD `80fd91c`, `main.so` SHA256 `b48371958e95f0bbb426eb76349712d12d834bcec4574fc14c1da0277cc3d742`). Startup confirmed clean: `MODULE_PIN result=PASS` → `ENGINE_TICK registered=1` → `TRANSPORT_HOOK registered=1`; `TRANSPORT_CACHE camps=20 guilds=8` and `CHEST_ASSOC RESULT=PASS` repeating every discovery pass. A real vanilla (unmodified) Windows client (Steam/Proton, connected over LAN via a temporary `socat` UDP forward since the test server publishes loopback-only by design) connected and played normally for a full session. Log evidence across the entire live container window: `TRANSPORT_REQUEST` count = 0 (the hook is inert unless the exact `ISREQ\|<32-hex>` sentinel arrives, so vanilla clients never trigger it) and zero `FMallocBinned2`/`LowLevelFatalError` crashes (timestamp-verified against container start; every historical crash entry in the log predates this build by multiple days). Establishes that installing this mod does not require or disrupt non-modded clients. Does not yet exercise the `ISREQ`/`IS1` request/reply round trip itself — that needs a client running the upstream Windows mod (§8 item 2, still open). Also identified a deploy-process hazard (copying `main.so` into a live mount while the old process still has it mapped) as the likely source of a `Signal 11`-only crash seen immediately after a prior redeploy — documented in §7, not a code defect. |
 | 4E.1 | Implemented, not yet build-verified or runtime-tested. Server-side `ISREQ`/`IS1` wire handler (§4): `RegisterHook` on `Debug_CheatCommand_ToServer` parses and queues requests; `on_engine_tick` drains the queue every tick against a registration-plan snapshot cached at the end of each discovery pass (cleared on world change); pool build is a standalone duplicate of the accepted §3 bounded chest walk (`build_transport_pool_for_request`), never a refactor of the existing diagnostic probe; reply is sent as a deliberately-leaked raw `TCHAR` buffer (never an `RC::Unreal::FString`) via `ProcessEvent`, applying the same leak-and-never-destruct rationale as `resolve_transport_item_name()` (§5) to the outbound direction. Closes §8 item 1 code-wise; §8 items 2-3 remain. |
 | 4D.9g | Accepted production implementation. Replaced the diagnostic-only 4D.9a-4D.9f probes (and their arm-file gating, attempt-flags, and per-tick leak/log globals) with a permanent `resolve_transport_item_name()` leak-and-cache helper, deduplicated by raw `TransportItemNameKey` bytes. Wired into the transport pool's `TRANSPORT_POOL_ITEM` log line, which now reports the resolved item name alongside the raw hex key. Closes §8 steps 1 and 5 from the prior entry. |

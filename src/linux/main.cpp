@@ -1680,17 +1680,26 @@ namespace
     auto get_transport_container_manager()
         -> TransportContainerManager
     {
-        std::vector<RC::Unreal::UObject*> managers{};
+        // Process-lifetime, never-destroyed vector: FindAllOf grows this
+        // storage using libUE4SS.so's allocator. A local vector here would
+        // free that storage from main.so on return, crossing the same
+        // allocator boundary the Stage 4a hardening notes already
+        // identified as a crash cause (see the identical pattern used by
+        // the diagnostic probe's own `managers` vector).
+        static auto* managers =
+            new std::vector<RC::Unreal::UObject*>();
+
+        managers->clear();
 
         RC::Unreal::UObjectGlobals::FindAllOf(
             STR("PalItemContainerManager"),
-            managers
+            *managers
         );
 
         TransportContainerManager result{};
         std::size_t nonnull_managers{};
 
-        for (auto* candidate : managers)
+        for (auto* candidate : *managers)
         {
             if (candidate == nullptr)
             {
@@ -1714,7 +1723,7 @@ namespace
                 : nullptr;
 
         result.ok =
-            managers.size() == 1 &&
+            managers->size() == 1 &&
             nonnull_managers == 1 &&
             result.manager != nullptr &&
             result.get_container_function !=
