@@ -141,6 +141,26 @@ Exact behavior observed:
   normally for 283+ further ticks with **zero crashes**. This is the
   decisive result: suppressing the destructor alone — nothing else changed
   versus 4D.9c — eliminated the crash entirely.
+- `Stage 4D.9e` — same pool-sourced FName and same leaked/undestructed
+  placement-new pattern as 4D.9d, but this time the mod also runs
+  `RC::to_string()` on the still-alive leaked result and logs the converted
+  character data (not just `.size()`). Result: `RESULT=PASS` — reading
+  character data out of a leaked, never-destructed `ToString()` result does
+  not reintroduce the corruption. This closes the gap 4D.9d left open (see
+  "Proven" below): both existence and content are safely readable off a
+  leaked result.
+- `Stage 4D.9f` — production-facing repeating probe: leaks one `ToString()`
+  result **per engine tick** on the same pool-sourced FName, reads its
+  character data via `RC::to_string()` each time (never destructing the
+  original), and logs cumulative `leak_count` alongside live process RSS
+  every 5 seconds. Deployed to the production container and monitored for
+  2+ continuous hours in a single, uninterrupted boot, covering roughly
+  121,000 leak-and-read cycles (`leak_count` 217,616 → 338,743) with **zero
+  crashes**. RSS grew from a ~1.45GB delta above baseline to a ~1.57GB delta
+  over the window — a real but slow, roughly linear leak (~1KB per leaked
+  object, ~60MB/hour) — fully absorbed by the existing daily 04:30
+  production restart. This is the strongest evidence yet that leak-and-cache
+  is safe at sustained, worst-case-frequency production load.
 - Control (established earlier in this session): with **no** FName probe
   armed, the same server ran 288+ ticks with zero crashes. The 850-slot
   pool walk itself is proven safe on its own.
@@ -170,14 +190,12 @@ deliberately (never destruct it). Item names are a small bounded set (272
 unique items observed in the test guild's pool), so the leaked footprint
 is negligible and bounded for the life of the server process.
 
-**Not yet proven:** Stage 4D.9d only proved `.size()` is safely readable
-from a leaked-but-undestructed result. It has not yet been proven that
-reading the *character data* itself (`.data()`, iteration, or an
-`RC::to_string()`-style conversion) out of a leaked result is also safe —
-that conversion routine could perform its own allocation that crosses the
-DSO boundary in a different way. A follow-up diagnostic (character-data
-read from a leaked result, not yet run) is needed before committing to the
-leak-and-cache production design.
+**Proven (as of 4D.9e/4D.9f):** reading character data out of a leaked,
+never-destructed `ToString()` result — via `RC::to_string()` — is safe,
+both single-shot (4D.9e) and under sustained per-tick production load
+(4D.9f: ~121,000 cycles over 2+ hours, zero crashes). The leak-and-cache
+design (§8) is no longer gated on further diagnostics; it is cleared for
+production implementation.
 
 The offline patternsleuth `FNamePool`/`FNameEntry` decoder path (Stage
 4d.8h, §8) remains a fallback if the character-data read turns out to be
@@ -214,7 +232,7 @@ numeric suffix, not just the base name.
 1. Direct `ItemContainerMap_InServer` manager-map inspection — allocator corruption.
 2. Broad reflected graph / `TFieldRange` traversal — allocator corruption.
 3. Bulk `FindAllOf("PalItemContainer")` — allocator corruption.
-4. `FName::ToString()` **destructed normally** / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode, triggered by the result's destructor. `ToString()` with the result deliberately leaked (never destructed) is proven safe (Stage 4D.9d, §5) and is no longer blocked.
+4. `FName::ToString()` **destructed normally** / `FName::GetPlainNameString()` — see §5, allocator fatal (SIGSEGV) after a correct decode, triggered by the result's destructor. `ToString()` with the result deliberately leaked (never destructed) — including reading its character data via `RC::to_string()`, single-shot and under sustained per-tick production load — is proven safe (Stage 4D.9d/4D.9e/4D.9f, §5) and is no longer blocked.
 5. Selected-chest property guesses, fixed accessor guesses — exhausted negative.
 6. Standalone registration does not prove membership transition.
 7. `OnReadyItemContainerGuildChest`, `OnUpdateItemContainerModule`, `OnUpdateItemContainer` transition paths — all negative.
@@ -262,25 +280,32 @@ runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/s
 
 ## 8. Immediate next action
 
-Stage 4D.9d proved the `FMallocBinned2` corruption comes from destructing
-`ToString()`'s result inside `main.so`, not from calling `ToString()`
-itself (§5). This reopens `ToString()` as a viable production path if
-results are deliberately leaked instead of destructed normally.
+Stages 4D.9d/4D.9e/4D.9f proved the `FMallocBinned2` corruption comes from
+destructing `ToString()`'s result inside `main.so`, not from calling
+`ToString()` itself, and that leaking the result — including reading its
+character data via `RC::to_string()`, both single-shot and under a
+~121,000-cycle sustained per-tick production run — is safe (§5).
+Leak-and-cache is cleared for production implementation; the diagnostic
+phase is complete.
 
-1. Run a follow-up diagnostic (not yet built): read the *character data*
-   (not just `.size()`) out of a leaked, undestructed `ToString()` result —
-   e.g. via `.data()`/iteration and/or the existing `RC::to_string()`
-   conversion — while still never destructing the original result. Confirm
-   this doesn't reintroduce the corruption before trusting it in production.
-2. If that's clean, implement the production leak-and-cache helper: one
-   leaked `ToString()` call per unique FName (keyed by raw
-   `comparison_index`/`number` bytes), copied into a cached plain
-   `std::string`, for use in the `IS1|id:cnt,...` wire transport reply (§4).
-3. Keep the offline patternsleuth `FNamePool` + `FNameEntry` decoder path
-   (Stage 4d.8h scope below) as a fallback only, in case the character-data
-   read in step 1 turns out to be unsafe.
+1. Implement the production leak-and-cache helper: one leaked `ToString()`
+   call per unique FName (keyed by raw `comparison_index`/`number` bytes),
+   character data copied into a cached plain `std::string`, for use in the
+   `IS1|id:cnt,...` wire transport reply (§4).
+2. Implement the server-side `ISREQ`/`IS1` wire handler itself (§4): resolve
+   requester camp → guild → aggregate same-guild storage excluding the
+   requester's own camp → serialize item IDs via the leak-and-cache helper
+   from step 1 → send the `IS1|...` reply.
+3. Validate end-to-end against a real Windows client, not just server logs —
+   4d.7b showed server-side registration alone doesn't surface the wider
+   pool to a real client without the actual wire transport (§3 known gap).
 4. Independently of FName serialization: still need a periodic/topology-aware
-   registration reconcile executor (§3 known gap).
+   registration reconcile executor (§3 known gap) — the executor is one-shot,
+   and 4d.7b proved it misses camps created after server startup (20→21
+   storages, plan never re-applied).
+5. Retire the diagnostic-only probes (4D.9a-4D.9f) from the runtime build
+   once the production helper (step 1) replaces them, so production doesn't
+   keep carrying dead per-tick leak/log code.
 
 Stage 4d.8h scope (fallback, not currently the priority): offline PalServer
 FName resolver + bounded disassembly. Re-verify PalServer SHA256, copy into
@@ -302,6 +327,8 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| 4D.9f | Accepted production diagnostic. Repeating per-tick leak-and-read probe deployed to production, monitored 2+ continuous hours in one uninterrupted boot (~121,000 leak/read cycles), zero crashes. RSS delta grew ~1.45GB→~1.57GB over the window (~60MB/hour, roughly linear), fully absorbed by the existing daily restart. Confirms leak-and-cache is production-safe at sustained worst-case frequency (§5, §8). |
+| 4D.9e | Accepted diagnostic, conclusive. Reads character data (`RC::to_string()`) off the same leaked/undestructed result as 4D.9d, still never destructing it. `RESULT=PASS` — closes the gap 4D.9d left open; character-data reads are safe, not just `.size()` (§5). |
 | 4D.9d | Accepted diagnostic, conclusive, supersedes 4D.9c's "dead end" framing. Same pool-sourced `ToString()` call as 4D.9c, but the result is placement-constructed into a static buffer and its destructor is deliberately never run. Server ran 283+ further ticks with zero crashes. Proves the corruption is in the result's destructor/deallocation path, not in `ToString()` itself — leak-and-cache is now a viable production path (§5, §8). |
 | 4D.9c | Accepted diagnostic. `ToString()` call with no `RC::to_string()` conversion, result destructed normally, still crashes identically — ruled out the mod-side conversion helper as the cause (§5). |
 | 4D.9b | Accepted diagnostic. `ToString()` on a memcpy'd/pool-sourced FName decodes correctly, then crashes shortly after (§5). |
