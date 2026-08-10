@@ -40,6 +40,7 @@
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Unreal/NameTypes.hpp>
 #include <Unreal/Core/Containers/Array.hpp>
+#include <Unreal/FMemory.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UClass.hpp>
@@ -159,10 +160,14 @@ static bool isClient(void* = nullptr) {
 //! pointing a spare inventory container's ItemSlotArray at that buffer during the native material scan
 //! (restore immediately after). Fresh local slots have no home container, so they can't be double-counted;
 //! the swap is a cheap pointer assignment per scan; minting is throttled to reply-time (g_poolDirty).
+//! ALLOCATOR: the swapped-in buffer MUST be FMemory-owned (see injectMinted). The native scan is closed-
+//! source and, at scale, was observed to Realloc/Free the array it was handed (crash_2026_08_10: a
+//! std::vector/CRT-heap buffer here produced "FMallocBinned2 Attempt to realloc an unrecognized block ...
+//! canary == 0x0" -> LowLevelFatalError -> client crash, the transient-swap twin of the FindAllOf
+//! cross-allocator hazard already hardened against elsewhere in this file).
 static void* g_lastWc = nullptr;                 // a WorldContext from the detours (for the slot factory)
 static std::vector<UObject*> g_mintedSlots;      // our minted slots (append source)
 static RawTArray g_savedDonorArr{};              // cont5's real {data,num,max}, saved across the swap
-static std::vector<UObject*> g_swapBuf;          // [cont5's real slots...] + [minted slots...], cont5 points here during a scan
 static UObject* g_swapDonor = nullptr;           // the EXACT donor injectMinted swapped — restore must target THIS one, not a raced g_donorCont
 static bool g_swapped2 = false;
 static bool g_poolDirty = false;                 // reply arrived -> re-mint on the next detour tick
@@ -244,26 +249,39 @@ static void injectMinted() {
     //! combined = real slots (kept, so implants stay visible + in-scan) then minted slots. Stamp each minted
     //! slot so the scan accepts it as belonging to cont5: ContainerId (@0x11C) = cont5's ID (@0x38), and give
     //! it a SlotIndex (@0x118) matching its position in the combined array.
+    //! Buffer is FMemory-owned (GMalloc), not CRT-heap: the native scan is closed-source and, at scale, was
+    //! observed to Realloc/Free the array it's handed. A CRT buffer there crashes FMallocBinned2's bookkeeping
+    //! ("Attempt to realloc an unrecognized block ... canary == 0x0"); an FMemory block is a block the engine's
+    //! own allocator actually recognizes, so a native Realloc/Free against it is valid either way.
     uint8_t* cid = (uint8_t*)dc + OFF_CONT_ID;
-    g_swapBuf.clear();
-    g_swapBuf.reserve((size_t)g_savedDonorArr.num + g_mintedSlots.size());
-    for (int i = 0; i < g_savedDonorArr.num; ++i) g_swapBuf.push_back(((UObject**)g_savedDonorArr.data)[i]);
+    const int32_t combined = g_savedDonorArr.num + (int32_t)g_mintedSlots.size();
+    UObject** buf = (UObject**)FMemory::Malloc((size_t)combined * sizeof(UObject*));
+    if (!buf) return;                                            // OOM (a few KB): skip this swap, retry next tick
+    for (int i = 0; i < g_savedDonorArr.num; ++i) buf[i] = ((UObject**)g_savedDonorArr.data)[i];
+    int32_t widx = g_savedDonorArr.num;
     for (UObject* s : g_mintedSlots) {
         if (!s) continue;
         std::memcpy((uint8_t*)s + OFF_SLOT_CONT_ID, cid, 16);
-        *(int32_t*)((uint8_t*)s + OFF_SLOT_INDEX) = (int32_t)g_swapBuf.size();
-        g_swapBuf.push_back(s);
+        *(int32_t*)((uint8_t*)s + OFF_SLOT_INDEX) = widx;
+        buf[widx++] = s;
     }
-    slots->data = (uint8_t*)g_swapBuf.data();
-    slots->num  = (int32_t)g_swapBuf.size();
-    slots->max  = (int32_t)g_swapBuf.size();
+    slots->data = (uint8_t*)buf;
+    slots->num  = widx;
+    slots->max  = combined;
     g_swapDonor = dc;                                            // pin: restore MUST target this exact donor
     g_swapped2  = true;
     if (g_verbose && g_injDiag < 8) { ++g_injDiag; Output::send(STR("[ISGATE] INJDIAG appended {} minted after {} real slots\n"), (int)g_mintedSlots.size(), g_savedDonorArr.num); }
 }
 static void restoreMinted() {
     if (!g_swapped2) return;
-    if (g_swapDonor) { RawTArray* slots = (RawTArray*)((uint8_t*)g_swapDonor + OFF_CONT_SLOTS); *slots = g_savedDonorArr; }
+    if (g_swapDonor) {
+        RawTArray* slots = (RawTArray*)((uint8_t*)g_swapDonor + OFF_CONT_SLOTS);
+        //! Free whatever data pointer is CURRENTLY there, not the one injectMinted handed in: if the native
+        //! scan grew/shrank the array mid-call, slots->data now points at a Realloc'd block — still
+        //! FMemory-owned, just not our original pointer. Either way it's ours to release before we drop it.
+        if (slots->data) FMemory::Free(slots->data);
+        *slots = g_savedDonorArr;
+    }
     g_swapDonor = nullptr;
     g_swapped2  = false;
 }
@@ -786,7 +804,11 @@ static void resetState() {
     g_mintedSlots.clear();
     g_common = nullptr; g_donorCont = nullptr;
     g_pool.clear();
-    g_swapped2 = false; g_swapDonor = nullptr; g_swapBuf.clear();   // drop the append buffer + pinned donor of the old world
+    //! g_swapDonor is a world object: by the time a world change is observed here it may already be dangling
+    //! (same reasoning as g_common/g_donorCont below — don't dereference it). injectMinted/restoreMinted always
+    //! run as an immediate pair within one detour call, so g_swapped2 == true here should never actually happen;
+    //! if it somehow does, the FMemory swap buffer leaks a few KB rather than risk reading a freed UObject.
+    g_swapped2 = false; g_swapDonor = nullptr;   // drop the pinned donor of the old world
     g_srvInjecting = false; g_injectDepth = 0;
     g_poolDirty = false; g_needTrigger = false;
     g_awaitingReply = false; g_lastTrigAt = 0;

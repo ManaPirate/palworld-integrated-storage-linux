@@ -330,41 +330,62 @@ over copying into a live mount.
 
 ## 8. Immediate next action
 
-Stage 4E.1 (§9) implemented the server-side `ISREQ`/`IS1` wire handler
-(§4). Stage 4E.2 (§9) confirmed clean build/deploy/idle-operation and
-vanilla-client non-disruption. Stage 4E.3 (§9) then took the **first real
-`ISREQ`** end-to-end and crashed the server — root cause found and fixed:
-`get_transport_container_manager()` used a local (stack) `std::vector` as
-the output parameter to `FindAllOf`, which grows the vector using
-`libUE4SS.so`'s allocator; destroying that vector on function return (every
-request) freed that storage from `main.so`, corrupting `FMallocBinned2`
-bookkeeping — the exact cross-DSO destructor hazard Stage 4a's own
-hardening notes already documented once. Fixed by switching to the same
-process-lifetime heap-vector pattern used at every other `FindAllOf` call
-site in this file. Not yet rebuilt/redeployed/retested (§9 4E.3).
+Stage 4E.1-4E.3 (§9) got the server-side `ISREQ`/`IS1` wire handler (§4)
+implemented, built, deployed, and fixed after a real crash. Retesting
+against a **real client running the actual upstream Windows mod** (Steam
+Workshop build) then produced the first fully successful end-to-end round
+trip: three clean `TRANSPORT_REQUEST queued=1` -> `TRANSPORT_REQUEST
+RESULT=SENT items=272 len=5664` cycles, zero server-side crashes, and the
+tester directly confirmed cross-camp materials were visible and usable
+in-game. The separate, pre-existing UE4SS/Proton connect-crash blocker
+(previously item 3 here) is also resolved for testing purposes: swapping
+the vanilla `UE4SS-RE/RE-UE4SS` release for the community
+`Okaetsu/RE-UE4SS` Palworld fork (`experimental-palworld` tag,
+`UE4SS-Palworld.zip`, ships a `MemberVariableLayout.ini` fixing a
+`UEnum`-layout shift Palworld's own engine edits introduced) let a real
+client connect and play a full session — the underlying UE4SS-side bug is
+still open upstream (UE4SS-RE/RE-UE4SS#1339) but is no longer a blocker
+here.
 
-1. ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2. Startup
-   and idle-operation markers confirmed clean: `TRANSPORT_HOOK
-   registered=1`, `TRANSPORT_CACHE camps=N guilds=N` each discovery pass,
-   zero crashes.
-2. Rebuild and redeploy the Stage 4E.3 fix, then retry the real-client
-   `ISREQ` test that caught the bug. Watch for `TRANSPORT_REQUEST
-   queued=1` followed by `TRANSPORT_REQUEST RESULT=SENT items=N len=N`
-   with **zero** `FMallocBinned2`/`Signal 11` — the first attempt got
-   `queued=1` and then crashed before `RESULT=SENT` ever printed (§9
-   4E.3). This also validates the two biggest remaining unproven
-   assumptions in Stage 4E.1: that `UObjectGlobals::RegisterHook` on an
-   incoming server RPC is a safe call context for this mod, and that a raw
-   leaked-buffer `RawTArray` (never an `RC::Unreal::FString`) is accepted
-   by `ProcessEvent` as a valid outbound FString parameter.
-3. Separately, client-side: UE4SS itself is currently crashing during the
-   Palworld connection handshake on this tester's Proton setup, independent
-   of this mod (reproduced with the mod's files completely absent, and
-   confirmed present in an upstream GitHub issue — UE4SS-RE/RE-UE4SS#1339,
-   open, no fix, "removing UE4SS stops the issue" is the only known
-   workaround so far). This blocks getting a stable client connected at
-   all, separate from anything fixable in this repo.
-4. Independently of FName serialization: still need a periodic/topology-aware
+That success immediately surfaced Stage 4E.4 (§9): a **new, client-side**
+crash, distinct from every crash before it in this project. Minidump
+forensics (see 4E.4 stage-log entry) pinned it to a real bug in the
+upstream client mod's own `src/dllmain.cpp`, in the `injectMinted()`
+transient array-swap that displays the guild pool in-game — not anything
+in this repo's Linux server code. Fixed in this repo's copy of
+`dllmain.cpp`; **not yet build- or runtime-verified** (no Windows/UE4SS
+SDK toolchain in this environment) — see item 1 below.
+
+1. **Build and test the Stage 4E.4 client fix.** `src/dllmain.cpp`'s
+   `injectMinted`/`restoreMinted` now allocate/free the transient swap
+   buffer via `RC::Unreal::FMemory::Malloc`/`Free` (GMalloc-backed)
+   instead of a `std::vector` CRT-heap buffer, so a native realloc/free
+   against it lands on a block the game's own `FMallocBinned2` actually
+   recognizes. This needs: (a) a clean Windows build against the real
+   UE4SS SDK headers (confirm `Unreal/FMemory.hpp` and the
+   `FMemory::Malloc(size_t)` / `FMemory::Free(void*)` signatures compile
+   as expected — verified by reading UE4SS's own internal source, not by
+   compiling here), and (b) a repeat of the exact session that crashed:
+   enter a camp with a large guild pool (272+ items reproduced it),
+   trigger several menu-opens back to back (the crash log showed 7
+   `injectMinted` calls in one frame just before it), watch for
+   `FMallocBinned2`/`LowLevelFatalError` — there should be none.
+2. ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2.
+3. ~~Rebuild/redeploy the Stage 4E.3 fix and retry the real-client `ISREQ`
+   test~~ — done, Stage 4E.4. Three clean round trips, zero server-side
+   crashes, materials confirmed visible/usable in-game. Both open
+   assumptions from Stage 4E.1 are now empirically confirmed: hooking
+   `Debug_CheatCommand_ToServer` via `RegisterHook` is a safe call context,
+   and a raw leaked-buffer `RawTArray` is accepted by `ProcessEvent` as a
+   valid outbound `FString` parameter.
+4. **Release packaging.** Given the Stage 4E.4 client bug, anyone using
+   this Linux server with an unpatched client mod build can hit this exact
+   crash under normal play (it took a real base, not a contrived stress
+   test, to trigger it). A release of this dedicated server should ship
+   paired with a rebuilt client mod DLL carrying the Stage 4E.4 fix (or at
+   minimum, prominent release notes pointing at it) rather than pointing
+   users at the unpatched Steam Workshop/NexusMods build.
+5. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap) — the executor is one-shot,
    and 4d.7b proved it misses camps created after server startup (20→21
    storages, plan never re-applied).
@@ -389,7 +410,8 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
-| 4E.3 | Bug found and fixed, not yet rebuilt/retested. First real `ISREQ` from an actual client reached the server (`TRANSPORT_REQUEST queued=1` logged), then the server crashed before replying (`FMallocBinned2 ... canary == 0x0 != 0xb7`, `Signal 11`, matching the exact §5 destructor-crossing-DSO signature). Root cause: `get_transport_container_manager()` passed a local `std::vector` to `FindAllOf`; `FindAllOf` grows that vector via `libUE4SS.so`'s allocator, and destroying it on function return (every request) freed that storage from `main.so` — the identical hazard Stage 4a's hardening notes already documented and fixed everywhere else in this file, missed in this one new function. Fixed by switching to the same process-lifetime heap-vector pattern (`static auto* managers = new std::vector<...>(); managers->clear();`) already used at every other `FindAllOf` call site. Diagnosed via direct binary parsing of the client-side UE4SS minidump (confirmed fault was inside `UE4SS.dll`, unrelated to this bug) plus server-side `docker logs` correlation (confirmed the server-side crash, separate from the client-side UE4SS/Proton connect crash tracked in §8 item 3). |
+| 4E.4 | Two results. (1) **Accepted, verified.** Rebuilt/redeployed the Stage 4E.3 server fix and retested against a real client running the actual upstream Windows mod (Steam Workshop). Three clean round trips over a ~5 minute, 37-discovery-cycle window, including a disconnect/reconnect: `TRANSPORT_REQUEST queued=1` -> `TRANSPORT_REQUEST RESULT=SENT items=272 len=5664`, zero crashes; tester confirmed cross-camp materials visible and usable in-game. First complete end-to-end validation of the whole Stage 4E transport feature. (2) **New bug found and fixed, not yet build/runtime-verified.** Immediately after those three successful round trips, the client crashed: `LowLevelFatalError [File:...MallocBinned2.cpp] [Line: 1430] FMallocBinned2 Attempt to realloc an unrecognized block ... canary == 0x0 != 0xe3`. Diagnosed via direct binary parsing of the client's `UEMinidump.dmp` (had to fix an offset bug in the ad-hoc parser's `MINIDUMP_MODULE.ModuleNameRva` field first — was reading `TimeDateStamp` instead) plus UTF-16 string extraction, which recovered the exact UE fatal-error text; correlated against `UE4SS.log` timestamps (crash landed right after a 4th `CH request sent`, moments after 7 `injectMinted` calls fired in one frame at an earlier menu-open). Root cause, in the client mod's own `src/dllmain.cpp` (not this repo's Linux server code): `injectMinted()` transiently points a real `UPalItemContainer`'s `ItemSlotArray.data` at a `std::vector<UObject*>` buffer (CRT heap) so a native material-availability scan can read the guild pool's minted slots; at scale (272 minted + 230 real slots, several scans back to back) that closed-source native scan evidently reallocated/freed the array it was handed, and since the buffer was never actually allocated by the game's `FMallocBinned2`, the free/realloc bookkeeping had no canary for it — same crash class as Stage 4E.3's `FindAllOf` bug (foreign-allocator memory handed to code that assumes it owns the allocator), different mechanism (pointer-aliasing into a live TArray vs. destroying a cross-DSO vector). Fixed by switching `injectMinted`/`restoreMinted` to allocate/free the swap buffer via `RC::Unreal::FMemory::Malloc`/`Free` (confirmed as the real public SDK API by reading UE4SS's own internal source, which uses it identically) instead of the CRT heap, so any native realloc/free against it is now valid. Needs a Windows build + retest before shipping (§8 item 1). |
+| 4E.3 | Bug found and fixed. First real `ISREQ` from an actual client reached the server (`TRANSPORT_REQUEST queued=1` logged), then the server crashed before replying (`FMallocBinned2 ... canary == 0x0 != 0xb7`, `Signal 11`, matching the exact §5 destructor-crossing-DSO signature). Root cause: `get_transport_container_manager()` passed a local `std::vector` to `FindAllOf`; `FindAllOf` grows that vector via `libUE4SS.so`'s allocator, and destroying it on function return (every request) freed that storage from `main.so` — the identical hazard Stage 4a's hardening notes already documented and fixed everywhere else in this file, missed in this one new function. Fixed by switching to the same process-lifetime heap-vector pattern (`static auto* managers = new std::vector<...>(); managers->clear();`) already used at every other `FindAllOf` call site. Diagnosed via direct binary parsing of the client-side UE4SS minidump (confirmed fault was inside `UE4SS.dll`, unrelated to this bug) plus server-side `docker logs` correlation (confirmed the server-side crash, separate from the client-side UE4SS/Proton connect crash tracked in §8 item 3). |
 | 4E.2 | Accepted runtime verification, partial. Built and deployed Stage 4E.1 to the isolated test server (HEAD `80fd91c`, `main.so` SHA256 `b48371958e95f0bbb426eb76349712d12d834bcec4574fc14c1da0277cc3d742`). Startup confirmed clean: `MODULE_PIN result=PASS` → `ENGINE_TICK registered=1` → `TRANSPORT_HOOK registered=1`; `TRANSPORT_CACHE camps=20 guilds=8` and `CHEST_ASSOC RESULT=PASS` repeating every discovery pass. A real vanilla (unmodified) Windows client (Steam/Proton, connected over LAN via a temporary `socat` UDP forward since the test server publishes loopback-only by design) connected and played normally for a full session. Log evidence across the entire live container window: `TRANSPORT_REQUEST` count = 0 (the hook is inert unless the exact `ISREQ\|<32-hex>` sentinel arrives, so vanilla clients never trigger it) and zero `FMallocBinned2`/`LowLevelFatalError` crashes (timestamp-verified against container start; every historical crash entry in the log predates this build by multiple days). Establishes that installing this mod does not require or disrupt non-modded clients. Does not yet exercise the `ISREQ`/`IS1` request/reply round trip itself — that needs a client running the upstream Windows mod (§8 item 2, still open). Also identified a deploy-process hazard (copying `main.so` into a live mount while the old process still has it mapped) as the likely source of a `Signal 11`-only crash seen immediately after a prior redeploy — documented in §7, not a code defect. |
 | 4E.1 | Implemented, not yet build-verified or runtime-tested. Server-side `ISREQ`/`IS1` wire handler (§4): `RegisterHook` on `Debug_CheatCommand_ToServer` parses and queues requests; `on_engine_tick` drains the queue every tick against a registration-plan snapshot cached at the end of each discovery pass (cleared on world change); pool build is a standalone duplicate of the accepted §3 bounded chest walk (`build_transport_pool_for_request`), never a refactor of the existing diagnostic probe; reply is sent as a deliberately-leaked raw `TCHAR` buffer (never an `RC::Unreal::FString`) via `ProcessEvent`, applying the same leak-and-never-destruct rationale as `resolve_transport_item_name()` (§5) to the outbound direction. Closes §8 item 1 code-wise; §8 items 2-3 remain. |
 | 4D.9g | Accepted production implementation. Replaced the diagnostic-only 4D.9a-4D.9f probes (and their arm-file gating, attempt-flags, and per-tick leak/log globals) with a permanent `resolve_transport_item_name()` leak-and-cache helper, deduplicated by raw `TransportItemNameKey` bytes. Wired into the transport pool's `TRANSPORT_POOL_ITEM` log line, which now reports the resolved item name alongside the raw hex key. Closes §8 steps 1 and 5 from the prior entry. |
