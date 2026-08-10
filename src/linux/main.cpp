@@ -377,6 +377,39 @@ namespace
         return value.time_since_epoch().count() == 0;
     }
 
+    auto read_process_rss_kb() noexcept -> std::uint64_t
+    {
+        std::FILE* const status_file =
+            std::fopen("/proc/self/status", "r");
+
+        if (status_file == nullptr)
+        {
+            return 0;
+        }
+
+        unsigned long rss_kb{0};
+        char line[256];
+
+        while (
+            std::fgets(
+                line,
+                sizeof(line),
+                status_file
+            ) != nullptr
+        )
+        {
+            if (std::strncmp(line, "VmRSS:", 6) == 0)
+            {
+                std::sscanf(line + 6, "%lu", &rss_kb);
+                break;
+            }
+        }
+
+        std::fclose(status_file);
+
+        return static_cast<std::uint64_t>(rss_kb);
+    }
+
     auto guid_is_zero(const GuildKey& key) noexcept -> bool
     {
         for (const auto byte : key)
@@ -699,6 +732,11 @@ namespace
     std::atomic_bool g_pool_fname_probe_9c_attempted{false};
     std::atomic_bool g_pool_fname_probe_9d_attempted{false};
     std::atomic_bool g_pool_fname_probe_9e_attempted{false};
+
+    std::atomic_bool g_stage4d9f_key_cached{false};
+    std::atomic_bool g_stage4d9f_disabled{false};
+    std::atomic_uint64_t g_stage4d9f_leak_count{0};
+    TransportItemNameKey g_stage4d9f_cached_key{};
 
     std::atomic_uint32_t g_engine_tick_entries{0};
     std::atomic_uint64_t g_chest_association_runs{0};
@@ -1405,6 +1443,45 @@ namespace
             };
 
             arm_path += ".stage4d9e-leaked-tostring-chardata-arm";
+
+            return
+                ::access(
+                    arm_path.c_str(),
+                    F_OK
+                ) == 0;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    auto stage4d9f_probe_arm_file_present() noexcept -> bool
+    {
+        Dl_info module_info{};
+
+        if (
+            dladdr(
+                static_cast<const void*>(
+                    &ModIntegratedStorageModulePin::
+                        g_process_lifetime_pin
+                ),
+                &module_info
+            ) == 0 ||
+            module_info.dli_fname == nullptr ||
+            module_info.dli_fname[0] == '\0'
+        )
+        {
+            return false;
+        }
+
+        try
+        {
+            std::string arm_path{
+                module_info.dli_fname
+            };
+
+            arm_path += ".stage4d9f-leak-growth-probe-arm";
 
             return
                 ::access(
@@ -2130,6 +2207,208 @@ namespace
             emit_marker(
                 "[ModIntegratedStorageCpp] "
                 "LEAKED_TOSTRING_CHARDATA_PROBE RESULT=EXCEPTION"
+            );
+        }
+    }
+
+    // Captures the same pool-sourced FName bytes 4d.9b-4d.9e already
+    // proved safe to reconstruct, once, so the repeating 4d.9f probe
+    // below can reuse it on every tick without depending on the
+    // single-shot pool walk running more than once.
+    auto cache_stage4d9f_leak_growth_key(
+        const std::vector<
+            std::pair<TransportItemNameKey, std::int64_t>
+        >& ordered_pool
+    ) noexcept -> void
+    {
+        static const bool armed =
+            stage4d9f_probe_arm_file_present();
+
+        if (!armed)
+        {
+            return;
+        }
+
+        if (ordered_pool.empty())
+        {
+            return;
+        }
+
+        if (
+            sizeof(RC::Unreal::FName) !=
+                ordered_pool[0].first.size()
+        )
+        {
+            return;
+        }
+
+        bool expected_cached{false};
+
+        if (
+            !g_stage4d9f_key_cached.
+                compare_exchange_strong(
+                    expected_cached,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        g_stage4d9f_cached_key = ordered_pool[0].first;
+    }
+
+    // Isolated, opt-in, repeating diagnostic. Stages 4d.9d/4d.9e proved
+    // that a single leaked-and-read FName::ToString() result is safe.
+    // This stage tests whether *repeating* that exact leak-and-read
+    // pattern on every engine tick -- the highest frequency a
+    // production leak-and-cache design could ever hit -- causes
+    // unbounded process memory growth. It reuses the pool-sourced FName
+    // cached once by cache_stage4d9f_leak_growth_key(), heap-leaks a
+    // fresh ToString() result from it every tick (never destructed and
+    // never freed, exactly like 4d.9d/4d.9e but repeated instead of
+    // single-shot), reads its character data via RC::to_string() every
+    // tick (exactly like 4d.9e), and every five seconds logs the
+    // cumulative leak count alongside the process's live VmRSS so the
+    // growth curve can be read directly off the log. It never
+    // self-terminates on success; it is only ever active while
+    // explicitly armed.
+    auto run_stage4d9f_leak_growth_probe() noexcept -> void
+    {
+        static const bool armed =
+            stage4d9f_probe_arm_file_present();
+
+        if (!armed)
+        {
+            return;
+        }
+
+        if (
+            g_stage4d9f_disabled.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        if (
+            !g_stage4d9f_key_cached.load(
+                std::memory_order_acquire
+            )
+        )
+        {
+            return;
+        }
+
+        if (!RC::Unreal::IsInGameThreadRaw())
+        {
+            return;
+        }
+
+        try
+        {
+            RC::Unreal::FName reconstructed_fname{};
+
+            std::memcpy(
+                &reconstructed_fname,
+                g_stage4d9f_cached_key.data(),
+                g_stage4d9f_cached_key.size()
+            );
+
+            using ToStringResultType =
+                decltype(reconstructed_fname.ToString());
+
+            auto* const leaked_result =
+                new ToStringResultType(
+                    reconstructed_fname.ToString()
+                );
+
+            // Deliberately not calling leaked_result's destructor, and
+            // deliberately never deleting the heap allocation itself --
+            // this is the sustained, worst-case-frequency version of
+            // the leak stages 4d.9d/4d.9e already proved safe once.
+            const auto narrow_result =
+                RC::to_string(*leaked_result);
+
+            static_cast<void>(narrow_result);
+
+            const auto leak_count =
+                g_stage4d9f_leak_count.fetch_add(
+                    1,
+                    std::memory_order_acq_rel
+                ) + 1;
+
+            static Clock::time_point last_report{};
+            static std::uint64_t baseline_rss_kb{0};
+
+            const auto now = Clock::now();
+
+            if (leak_count == 1)
+            {
+                baseline_rss_kb = read_process_rss_kb();
+                last_report = now;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "LEAK_GROWTH_PROBE START "
+                    "baseline_rss_kb=%llu",
+                    static_cast<unsigned long long>(
+                        baseline_rss_kb
+                    )
+                );
+
+                return;
+            }
+
+            if (
+                timepoint_is_empty(last_report) ||
+                now - last_report >=
+                    std::chrono::seconds(5)
+            )
+            {
+                last_report = now;
+
+                const auto current_rss_kb =
+                    read_process_rss_kb();
+
+                const auto delta_kb =
+                    current_rss_kb >= baseline_rss_kb
+                        ? current_rss_kb - baseline_rss_kb
+                        : 0;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "LEAK_GROWTH_PROBE REPORT "
+                    "leak_count=%llu rss_kb=%llu "
+                    "baseline_rss_kb=%llu delta_kb=%llu",
+                    static_cast<unsigned long long>(
+                        leak_count
+                    ),
+                    static_cast<unsigned long long>(
+                        current_rss_kb
+                    ),
+                    static_cast<unsigned long long>(
+                        baseline_rss_kb
+                    ),
+                    static_cast<unsigned long long>(
+                        delta_kb
+                    )
+                );
+            }
+        }
+        catch (...)
+        {
+            g_stage4d9f_disabled.store(
+                true,
+                std::memory_order_release
+            );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "LEAK_GROWTH_PROBE RESULT=EXCEPTION"
             );
         }
     }
@@ -3349,6 +3628,7 @@ namespace
             run_stage4d9c_tostring_only_probe(ordered_pool);
             run_stage4d9d_leaked_tostring_probe(ordered_pool);
             run_stage4d9e_leaked_tostring_chardata_probe(ordered_pool);
+            cache_stage4d9f_leak_growth_key(ordered_pool);
 
             const auto guild_hex =
                 guid_to_hex(selected_guild);
@@ -14290,6 +14570,8 @@ namespace
             return;
         }
 
+        run_stage4d9f_leak_growth_probe();
+
         if (
             g_role_probe_requested.exchange(
                 false,
@@ -14382,7 +14664,7 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.9e-leaked-tostring-chardata-probe");
+                STR("0.1.0-linux-stage4d.9f-leak-growth-probe");
 
             ModDescription =
                 STR(
@@ -14391,8 +14673,11 @@ namespace
                     "opt-in isolated FName::ToString() diagnostics: "
                     "GetFName()-obtained, memcpy'd/pool-sourced, "
                     "pool-sourced-without-RC::to_string()-conversion, "
-                    "pool-sourced-with-intentionally-leaked-result, and "
-                    "pool-sourced-leaked-result-with-chardata-read."
+                    "pool-sourced-with-intentionally-leaked-result, "
+                    "pool-sourced-leaked-result-with-chardata-read, and "
+                    "a repeating leak-and-read growth probe that leaks "
+                    "one ToString() result per engine tick and reports "
+                    "process VmRSS over time."
                 );
 
             ModAuthors =
