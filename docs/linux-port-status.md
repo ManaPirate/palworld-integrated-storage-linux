@@ -83,8 +83,12 @@ is insufficient for a real Windows client — the client only shows Guild
 Chest resources it already understands; it never surfaces the wider
 same-guild material pool without the actual upstream wire transport
 (`ISREQ`/`IS1`, below). Stage 4E.1 (§9) implemented the server side of
-this transport; it has not yet been validated against a real Windows
-client (§8 item 2).
+this transport. Stage 4E.2 (§9) confirmed a real vanilla (unmodified)
+Windows client connects and plays normally against a server running it —
+the hook is inert unless the exact sentinel payload arrives, so installing
+this mod does not require or affect non-modded clients. The actual
+`ISREQ`/`IS1` request/reply round trip still requires a client running the
+upstream Windows mod, and remains unvalidated (§8 item 2).
 
 ## 4. Transport wire protocol (Stage 4E.1: server side implemented)
 
@@ -128,8 +132,12 @@ constructed for the reply, so no engine-owned destructor for it can ever
 run inside `main.so` (same leak-and-never-destruct rationale as §5's
 `resolve_transport_item_name()`, applied to the one other place this mod
 hands an Unreal-visible string-shaped buffer back to the engine).
-Not yet build-verified or runtime-tested (§8 item 1 code-complete,
-item 2 pending).
+Build- and runtime-verified as of Stage 4E.2 (§9): clean build, clean
+deploy, `TRANSPORT_HOOK registered=1` at startup, `TRANSPORT_CACHE`
+populating every discovery pass, and zero crashes across a full real-client
+session. The request/reply round trip itself (a client actually sending
+`ISREQ`) is still unexercised — that needs a client running the upstream
+Windows mod (§8 item 2).
 
 ## 5. FName stringification — current status (Stage 4D.9, this session)
 
@@ -309,30 +317,46 @@ staging output: /staging/ModIntegratedStorageCpp (host: .../staging)
 runtime deploy target: /mnt/disk1/Development/palworld-linux-mods/runtime-test/serverfiles/Pal/Binaries/Linux/Mods/ModIntegratedStorageCpp/
 ```
 
+Deploy caution (observed twice, Stage 4E.2): copying a new `main.so` over
+the old one while the target container's PalServer process still has it
+`mmap`'d, then restarting, produces a bare `Signal 11 caught` with no
+`FMallocBinned2`/`LowLevelFatalError` alongside it — cosmetically similar
+to the real allocator-corruption crash (§5) but distinct from it (no
+canary-mismatch line, and it does not recur on a second restart that
+doesn't touch the file). Root cause is believed to be the in-place
+overwrite racing the still-running old process, not a code defect.
+Prefer stopping the container before copying, then starting it back up,
+over copying into a live mount.
+
 ## 8. Immediate next action
 
 Stage 4E.1 (§9) implemented the server-side `ISREQ`/`IS1` wire handler
 (§4): a `Debug_CheatCommand_ToServer` hook queues parsed requests,
 `on_engine_tick` drains the queue against a cached registration-plan
 snapshot, builds the guild-minus-own-camp pool via a standalone bounded
-walk, and replies with a leaked raw-buffer `IS1|...` FString. This is
-code-complete but has not been built or runtime-tested yet.
+walk, and replies with a leaked raw-buffer `IS1|...` FString. Stage 4E.2
+(§9) built, deployed, and monitored it — clean startup, clean idle
+operation, and a real vanilla client connecting and playing normally with
+zero disruption and zero `TRANSPORT_REQUEST` fires. The request/reply path
+itself is still unexercised.
 
-1. Build, deploy, and monitor Stage 4E.1 the same way as every prior
-   stage (dev container build → isolated test server → log monitoring)
-   before trusting it. Specifically watch for: `TRANSPORT_HOOK
-   registered=1` at startup, `TRANSPORT_CACHE camps=N guilds=N` each
-   discovery pass, and — once a real client sends a request —
-   `TRANSPORT_REQUEST queued=1` followed by `TRANSPORT_REQUEST
-   RESULT=SENT items=N len=N` with zero crashes.
-2. Validate end-to-end against a real Windows client, not just server logs —
-   4d.7b showed server-side registration alone doesn't surface the wider
-   pool to a real client without the actual wire transport (§3 known gap).
-   This also validates the two biggest unproven assumptions in Stage
-   4E.1: that `UObjectGlobals::RegisterHook` on an incoming server RPC is
-   a safe call context for this mod, and that a raw leaked-buffer
-   `RawTArray` (never an `RC::Unreal::FString`) is accepted by
-   `ProcessEvent` as a valid outbound FString parameter.
+1. ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2. Startup
+   and idle-operation markers confirmed clean: `TRANSPORT_HOOK
+   registered=1`, `TRANSPORT_CACHE camps=N guilds=N` each discovery pass,
+   zero crashes. Still outstanding: a real `ISREQ` has never been sent, so
+   `TRANSPORT_REQUEST queued=1` / `TRANSPORT_REQUEST RESULT=SENT
+   items=N len=N` remain unverified — needs a client running the upstream
+   Windows mod (item 2).
+2. Validate the actual request/reply round trip against a client running
+   the upstream Windows mod (not just a vanilla connection, which Stage
+   4E.2 already confirmed is safe) — 4d.7b showed server-side registration
+   alone doesn't surface the wider pool to a real client without the
+   actual wire transport (§3 known gap). This also validates the two
+   biggest unproven assumptions in Stage 4E.1: that
+   `UObjectGlobals::RegisterHook` on an incoming server RPC is a safe call
+   context for this mod, and that a raw leaked-buffer `RawTArray` (never
+   an `RC::Unreal::FString`) is accepted by `ProcessEvent` as a valid
+   outbound FString parameter.
 3. Independently of FName serialization: still need a periodic/topology-aware
    registration reconcile executor (§3 known gap) — the executor is one-shot,
    and 4d.7b proved it misses camps created after server startup (20→21
@@ -358,6 +382,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| 4E.2 | Accepted runtime verification, partial. Built and deployed Stage 4E.1 to the isolated test server (HEAD `80fd91c`, `main.so` SHA256 `b48371958e95f0bbb426eb76349712d12d834bcec4574fc14c1da0277cc3d742`). Startup confirmed clean: `MODULE_PIN result=PASS` → `ENGINE_TICK registered=1` → `TRANSPORT_HOOK registered=1`; `TRANSPORT_CACHE camps=20 guilds=8` and `CHEST_ASSOC RESULT=PASS` repeating every discovery pass. A real vanilla (unmodified) Windows client (Steam/Proton, connected over LAN via a temporary `socat` UDP forward since the test server publishes loopback-only by design) connected and played normally for a full session. Log evidence across the entire live container window: `TRANSPORT_REQUEST` count = 0 (the hook is inert unless the exact `ISREQ\|<32-hex>` sentinel arrives, so vanilla clients never trigger it) and zero `FMallocBinned2`/`LowLevelFatalError` crashes (timestamp-verified against container start; every historical crash entry in the log predates this build by multiple days). Establishes that installing this mod does not require or disrupt non-modded clients. Does not yet exercise the `ISREQ`/`IS1` request/reply round trip itself — that needs a client running the upstream Windows mod (§8 item 2, still open). Also identified a deploy-process hazard (copying `main.so` into a live mount while the old process still has it mapped) as the likely source of a `Signal 11`-only crash seen immediately after a prior redeploy — documented in §7, not a code defect. |
 | 4E.1 | Implemented, not yet build-verified or runtime-tested. Server-side `ISREQ`/`IS1` wire handler (§4): `RegisterHook` on `Debug_CheatCommand_ToServer` parses and queues requests; `on_engine_tick` drains the queue every tick against a registration-plan snapshot cached at the end of each discovery pass (cleared on world change); pool build is a standalone duplicate of the accepted §3 bounded chest walk (`build_transport_pool_for_request`), never a refactor of the existing diagnostic probe; reply is sent as a deliberately-leaked raw `TCHAR` buffer (never an `RC::Unreal::FString`) via `ProcessEvent`, applying the same leak-and-never-destruct rationale as `resolve_transport_item_name()` (§5) to the outbound direction. Closes §8 item 1 code-wise; §8 items 2-3 remain. |
 | 4D.9g | Accepted production implementation. Replaced the diagnostic-only 4D.9a-4D.9f probes (and their arm-file gating, attempt-flags, and per-tick leak/log globals) with a permanent `resolve_transport_item_name()` leak-and-cache helper, deduplicated by raw `TransportItemNameKey` bytes. Wired into the transport pool's `TRANSPORT_POOL_ITEM` log line, which now reports the resolved item name alongside the raw hex key. Closes §8 steps 1 and 5 from the prior entry. |
 | 4D.9f | Accepted production diagnostic. Repeating per-tick leak-and-read probe deployed to production, monitored 2+ continuous hours in one uninterrupted boot (~121,000 leak/read cycles), zero crashes. RSS delta grew ~1.45GB→~1.57GB over the window (~60MB/hour, roughly linear), fully absorbed by the existing daily restart. Confirms leak-and-cache is production-safe at sustained worst-case frequency (§5, §8). |
