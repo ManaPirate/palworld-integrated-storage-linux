@@ -949,9 +949,7 @@ namespace
     std::atomic_bool g_chest_association_running{false};
     std::atomic_bool g_chest_association_enabled{false};
 
-    std::atomic_bool g_full_plan_registration_attempted{false};
     std::atomic_bool g_full_plan_registration_completed{false};
-    std::atomic_bool g_full_plan_registration_gate_reported{false};
     std::atomic_bool g_full_plan_registration_blocked_reported{false};
 
     std::atomic_bool g_observability_metadata_reported{false};
@@ -1475,45 +1473,6 @@ namespace
         return base_camp_class;
     }
 
-
-    auto stage4d7a_arm_file_present() noexcept -> bool
-    {
-        Dl_info module_info{};
-
-        if (
-            dladdr(
-                static_cast<const void*>(
-                    &ModIntegratedStorageModulePin::
-                        g_process_lifetime_pin
-                ),
-                &module_info
-            ) == 0 ||
-            module_info.dli_fname == nullptr ||
-            module_info.dli_fname[0] == '\0'
-        )
-        {
-            return false;
-        }
-
-        try
-        {
-            std::string arm_path{
-                module_info.dli_fname
-            };
-
-            arm_path += ".stage4d7a-arm";
-
-            return
-                ::access(
-                    arm_path.c_str(),
-                    F_OK
-                ) == 0;
-        }
-        catch (...)
-        {
-            return false;
-        }
-    }
 
     auto request_read_only_chest_association() noexcept
         -> void
@@ -13051,6 +13010,19 @@ namespace
         }
     }
 
+    // Stage 4F: promoted from the Stage 4d.7a arm-gated, one-shot
+    // diagnostic to permanent, periodic, default-enabled production
+    // behavior. Runs every discovery pass (~DiscoveryInterval) alongside
+    // run_read_only_chest_association - the same proven-safe context
+    // this whole file already trusts for reflection/FindAllOf/ProcessEvent
+    // work. Re-registering an already-registered pair is idempotent
+    // (matches the upstream Windows mod's own srvDiscoverReconcile(),
+    // which re-calls OnAvailableConcreteModel_ServerInternal on every
+    // pass with no de-duplication against previous passes), so removing
+    // the former one-shot latch here just makes new camps/chests created
+    // after server startup get picked up on their first post-creation
+    // discovery pass instead of never at all (the exact gap the Stage
+    // 4d.7a doc entry flagged as still open).
     auto run_controlled_full_plan_registration(
         const std::vector<RegistrationExecutionPair>& execution_pairs,
         const RegistrationCallMetadata& metadata,
@@ -13058,37 +13030,6 @@ namespace
         std::uint64_t planned_run
     ) -> void
     {
-        static const bool armed =
-            stage4d7a_arm_file_present();
-
-        if (
-            !g_full_plan_registration_gate_reported.exchange(
-                true,
-                std::memory_order_acq_rel
-            )
-        )
-        {
-            if (armed)
-            {
-                emit_marker(
-                    "[ModIntegratedStorageCpp] "
-                    "FULL_PLAN_REGISTER GATE=ARMED"
-                );
-            }
-            else
-            {
-                emit_marker(
-                    "[ModIntegratedStorageCpp] "
-                    "FULL_PLAN_REGISTER GATE=DISABLED"
-                );
-            }
-        }
-
-        if (!armed)
-        {
-            return;
-        }
-
         const bool game_thread =
             RC::Unreal::IsInGameThreadRaw();
 
@@ -13156,21 +13097,6 @@ namespace
                 );
             }
 
-            return;
-        }
-
-        bool expected_attempted{false};
-
-        if (
-            !g_full_plan_registration_attempted.
-                compare_exchange_strong(
-                    expected_attempted,
-                    true,
-                    std::memory_order_acq_rel,
-                    std::memory_order_acquire
-                )
-        )
-        {
             return;
         }
 
