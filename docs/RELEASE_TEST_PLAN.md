@@ -1,10 +1,22 @@
 # Release Test Plan
 
-Working checklist for validating both artifacts — the Linux dedicated-server
-mod (`main.so`, `linux/nullprism-dedicated-server`) and the patched Windows
-client mod (`main.dll`, Stage 4E.4 `FMemory` fix) — before merging to `main`
-and cutting a release. Run this on the isolated test server
-(`Palworld-NullPrism-Test`), never production.
+Working checklist for validating the release before merging to `main` and
+cutting it. Run this on the isolated test server (`Palworld-NullPrism-Test`),
+never production.
+
+**Release scope decision (2026-08-11):** confirmed the patched client DLL
+is redundant for the core feature — cross-camp display *and* consumption
+both work correctly with zero client-side mod, since Stage 4F's
+`OnAvailableConcreteModel_ServerInternal` registration makes the foreign
+chest genuinely, natively part of the local camp's storage server-side.
+The release is **server-only**: ship `main.so` + an install/use-case guide,
+and explicitly recommend against installing any client-side Integrated
+Storage mod (including the existing unpatched Steam Workshop version,
+which can still hit the Stage 4E.4 crash even though it's now
+unnecessary). Sections below marked "client mod" are kept for completeness
+and for the separate, still-worthwhile upstream contribution back to
+Sarfflow's original project — they are **not** release-blocking for this
+project's own release.
 
 Check items off as they pass. If something fails, stop and record the exact
 log lines / repro steps before continuing — don't paper over a failure by
@@ -12,16 +24,12 @@ retrying until it passes.
 
 ## 0. Build provenance
 
-- [ ] `main.so` built from `linux/nullprism-dedicated-server` HEAD, staged
-      SHA256 recorded (`readelf -n .../main.so | grep "Build ID"` +
-      `sha256sum`).
-- [ ] `main.dll` built from the `ManaPirate/RE-UE4SS` fork's
-      `cppmods/ModIntegratedStorageCpp/src/dllmain.cpp`, confirmed
-      byte-identical (`sha256sum`) to this repo's `src/dllmain.cpp` on
-      `linux/nullprism-dedicated-server` before building.
-- [ ] Both artifacts' build provenance (commit hash, source hash, artifact
-      hash) recorded somewhere durable (commit message, release notes draft,
-      or a scratch note) — not just left in a terminal scrollback.
+- [x] `main.so` built from `linux/nullprism-dedicated-server` HEAD
+      (`fca0e72`), staged SHA256 recorded.
+- [x] `main.dll` built from the `ManaPirate/RE-UE4SS` fork — confirmed
+      byte-identical (`sha256sum` match) to this repo's `src/dllmain.cpp`
+      before building. Kept for the upstream Sarfflow contribution, not
+      for this project's own release artifact.
 
 ## 1. Server-only health checks (no client needed)
 
@@ -77,7 +85,15 @@ camp's storage module, so there is nothing for a client to opt into):
       to keep shipping the patched client DLL at all, and if so, what its
       remaining value proposition is (if any).
 
-## 3. Patched client + display (Stage 4E transport)
+## 3. Patched client + display (Stage 4E transport) — NOT release-blocking
+
+**Not required for this project's release** (§0 scope decision) — the
+release recommends against installing any client mod at all. Kept here
+only for the separate upstream contribution back to Sarfflow's original
+project, where this client-side fix still matters (that project's users
+run it in listen-server/host setups, not this Linux dedicated-server
+port). Skip this section entirely for release sign-off; revisit only if
+pursuing the upstream PR.
 
 Connect with the freshly-built patched client (Stage 4E.4 fix).
 
@@ -181,10 +197,15 @@ Confirm the mod doesn't break existing native systems it sits next to.
 
 ## 8. Sign-off
 
-- [ ] All sections above checked off with no unresolved failures
+- [ ] Sections 0-2 and 4-7 (the release-blocking ones) checked off with no
+      unresolved failures — Section 3 is explicitly out of scope per §0
 - [ ] Any deviations/failures found during testing are either fixed and
       re-verified, or explicitly documented as a known limitation in
       `docs/linux-port-status.md` before release
 - [ ] `docs/linux-port-status.md` §9 stage log updated with the final
       soak-test evidence (mirroring how every other accepted stage in this
       project is recorded)
+- [ ] Release notes explicitly state: no client-side mod needed or
+      recommended; if you already have the Steam Workshop/NexusMods
+      Integrated Storage client mod installed, remove it (it's not just
+      unnecessary now, the unpatched version can still crash you)
