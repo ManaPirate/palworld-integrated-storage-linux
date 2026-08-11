@@ -419,16 +419,6 @@ namespace
         std::int32_t enter_base_camp_model_offset{-1};
         std::array<BuildMaterialLayout, 4> materials{};
         bool ok{};
-
-        // Diagnostic-only probe (not yet load-bearing): confirms whether
-        // RequestBuild_ToServer itself fires server-side, since Stage
-        // 4F.1's PalBuilderComponent hooks turned out to never fire on a
-        // dedicated server at all (fire counts stayed at zero through a
-        // real test session) - meaning those functions are client-
-        // predicted/local-only, not server-authoritative. Resolved the
-        // same way: verified once via reflection at init, never guessed.
-        std::int32_t request_build_id_offset{-1};
-        bool request_build_probe_ok{};
     };
 
     BuildGateLayout g_build_gate_layout{};
@@ -466,8 +456,6 @@ namespace
     std::atomic_uint64_t g_enter_base_camp_hook_fires{0};
     std::atomic_uint64_t g_exit_base_camp_hook_fires{0};
     std::atomic_uint64_t g_material_check_hook_fires{0};
-    std::atomic_uint64_t g_request_build_hook_fires{0};
-    std::atomic_bool g_request_build_hook_registered{false};
 
     template <std::size_t Size>
     auto emit_marker(const char (&message)[Size]) noexcept -> void
@@ -788,66 +776,13 @@ namespace
                 enter_base_camp_model_offset >= 0 &&
             materials_ok;
 
-        auto* network_player_cdo =
-            RC::Unreal::UObjectGlobals::StaticFindObject<
-                RC::Unreal::UObject*
-            >(
-                nullptr,
-                nullptr,
-                STR(
-                    "/Script/Pal."
-                    "Default__PalNetworkPlayerComponent"
-                )
-            );
-
-        auto* request_build_function =
-            network_player_cdo != nullptr
-                ? network_player_cdo->
-                    GetFunctionByNameInChain(
-                        STR("RequestBuild_ToServer")
-                    )
-                : nullptr;
-
-        if (request_build_function != nullptr)
-        {
-            auto* build_id_property =
-                RC::Unreal::CastField<
-                    RC::Unreal::FNameProperty
-                >(
-                    request_build_function->
-                        GetPropertyByNameInChain(
-                            STR("BuildObjectId")
-                        )
-                );
-
-            if (
-                build_id_property != nullptr &&
-                build_id_property->GetSize() == 8
-            )
-            {
-                g_build_gate_layout.
-                    request_build_id_offset =
-                        build_id_property->
-                            GetOffset_Internal();
-
-                g_build_gate_layout.
-                    request_build_probe_ok = true;
-            }
-        }
-
         emit_format(
             "[ModIntegratedStorageCpp] "
             "BUILD_GATE_LAYOUT ok=%d "
-            "enter_offset=%d "
-            "request_build_probe_ok=%d "
-            "request_build_id_offset=%d",
+            "enter_offset=%d",
             g_build_gate_layout.ok ? 1 : 0,
             g_build_gate_layout.
-                enter_base_camp_model_offset,
-            g_build_gate_layout.
-                request_build_probe_ok ? 1 : 0,
-            g_build_gate_layout.
-                request_build_id_offset
+                enter_base_camp_model_offset
         );
     }
 
@@ -3336,77 +3271,6 @@ namespace
             "queued=%zu",
             static_cast<void*>(check.camp),
             g_pending_material_checks.size()
-        );
-    }
-
-    // Diagnostic-only probe for RequestBuild_ToServer (see the comment
-    // on BuildGateLayout::request_build_id_offset). Does not feed the
-    // reconciliation queue yet - only confirms whether this RPC fires
-    // server-side at all, and whether BuildObjectId reads back sane.
-    auto on_request_build_probe_hook_pre(
-        RC::Unreal::UnrealScriptFunctionCallableContext&,
-        void*
-    ) -> void
-    {
-        g_request_build_hook_fires.fetch_add(
-            1,
-            std::memory_order_relaxed
-        );
-    }
-
-    auto on_request_build_probe_hook_post(
-        RC::Unreal::UnrealScriptFunctionCallableContext&
-            context,
-        void*
-    ) -> void
-    {
-        if (
-            !g_build_gate_layout.request_build_probe_ok ||
-            !RC::Unreal::IsInGameThreadRaw()
-        )
-        {
-            emit_format(
-                "[ModIntegratedStorageCpp] "
-                "BUILD_REQUEST_PROBE RESULT=FIRED "
-                "probe_ok=%d",
-                g_build_gate_layout.
-                    request_build_probe_ok ? 1 : 0
-            );
-
-            return;
-        }
-
-        struct RawParams
-        {
-            std::array<std::byte, 16> bytes{};
-        };
-
-        auto& params = context.GetParams<RawParams>();
-
-        TransportItemNameKey build_id{};
-
-        std::memcpy(
-            build_id.data(),
-            params.bytes.data() +
-                g_build_gate_layout.
-                    request_build_id_offset,
-            build_id.size()
-        );
-
-        // Raw hex only here (pure byte formatting, zero engine calls) -
-        // FName::ToString() (what resolve_transport_item_name() would
-        // call) was only ever proven safe from the tick context, not
-        // from inside a hook callback; resolving the human-readable name
-        // is deferred to the tick just like everything else this file
-        // does from a hook.
-        const auto hex = transport_name_key_to_hex(build_id);
-
-        emit_format(
-            "[ModIntegratedStorageCpp] "
-            "BUILD_REQUEST_PROBE RESULT=FIRED owner=%p "
-            "build_id_hex=%s",
-            static_cast<void*>(context.Context),
-            hex.data()
         );
     }
 
@@ -15401,8 +15265,8 @@ namespace
                 "[ModIntegratedStorageCpp] "
                 "BUILD_GATE_ACTIVITY "
                 "enter_fires=%llu exit_fires=%llu "
-                "check_fires=%llu request_build_fires=%llu "
-                "tracked=%zu pending=%zu",
+                "check_fires=%llu tracked=%zu "
+                "pending=%zu",
                 static_cast<unsigned long long>(
                     g_enter_base_camp_hook_fires.load(
                         std::memory_order_relaxed
@@ -15415,11 +15279,6 @@ namespace
                 ),
                 static_cast<unsigned long long>(
                     g_material_check_hook_fires.load(
-                        std::memory_order_relaxed
-                    )
-                ),
-                static_cast<unsigned long long>(
-                    g_request_build_hook_fires.load(
                         std::memory_order_relaxed
                     )
                 ),
@@ -15952,49 +15811,6 @@ namespace
                     "[ModIntegratedStorageCpp] "
                     "BUILD_GATE_HOOKS registered=%d",
                     hooks_registered ? 1 : 0
-                );
-            }
-
-            if (
-                !g_request_build_hook_registered.exchange(
-                    true,
-                    std::memory_order_acq_rel
-                )
-            )
-            {
-                bool probe_registered = false;
-
-                if (
-                    g_build_gate_layout.
-                        request_build_probe_ok
-                )
-                {
-                    try
-                    {
-                        RC::Unreal::UObjectGlobals::
-                            RegisterHook(
-                                STR(
-                                    "/Script/Pal."
-                                    "PalNetworkPlayerComponent:"
-                                    "RequestBuild_ToServer"
-                                ),
-                                &on_request_build_probe_hook_pre,
-                                &on_request_build_probe_hook_post,
-                                nullptr
-                            );
-
-                        probe_registered = true;
-                    }
-                    catch (...)
-                    {
-                        probe_registered = false;
-                    }
-                }
-
-                emit_format(
-                    "[ModIntegratedStorageCpp] "
-                    "BUILD_REQUEST_PROBE_HOOK registered=%d",
-                    probe_registered ? 1 : 0
                 );
             }
 
