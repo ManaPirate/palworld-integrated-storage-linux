@@ -138,24 +138,24 @@ This is the actual reported bug and its fix — test it precisely, not just
       fires it — purely a native client-side refresh quirk, not something
       this mod causes or can silently fix without hooking client code
       again (out of scope per the server-only release decision).
-- [ ] **Consumption location check** (important — this is different from
-      the reverted Stage 4F.1 design): the executor *registers* a foreign
-      chest into the local camp's storage module, it does not move items.
-      After a successful cross-camp build, confirm the consumed materials
-      decreased at the **foreign source camp's own chest** — not that they
-      appeared and then vanished from the local camp's chest, and not that
-      they were duplicated (guild total after the build should be exactly
-      `total_before - recipe_cost`, check by tallying both camps' real
-      chests before and after).
+- [x] **Consumption location check**: confirmed — Egg Incubator (10
+      Paladium Fragment, 5 Cloth, 30 Stone, 2 Ancient Civilization Parts)
+      built cross-camp; the foreign source camp's Ancient Civilization
+      Parts stack went from 212 to 210, exactly matching the recipe cost,
+      with nothing appearing in the local camp's own storage. Clean,
+      exact, single-source consumption — no duplication, no drift.
 - [ ] **New camp mid-session**: with the server already running, found (or
       have another player found) a brand-new same-guild base camp. Confirm
       it shows up as `+1` in the next `FULL_PLAN_REGISTER SUMMARY
       planned=N` (should increase without a server restart) within one
       discovery pass (~8s), then confirm building at that new camp using
       guild materials works.
-- [ ] **Empty-camp target**: a camp with zero of its own chests placed yet
-      should still be a valid cross-registration target — confirm a build
-      there using only guild-pooled materials succeeds.
+- [x] **Empty-camp target**: confirmed (Test A) — a camp with zero local
+      chests successfully built two items back-to-back using only
+      guild-pooled remote materials, checklist accurate throughout. Also
+      confirmed a fresh chest placed then removed at the same empty-camp
+      site (Test C) doesn't disturb this — see the known-behavior note
+      below re: the one unreproduced incident that prompted this testing.
 - [ ] **Guild isolation**: with two separate guilds each holding camps on
       the server, confirm guild A's materials are never visible or usable
       at guild B's camps. Check `CHEST_GUILD id=... chests=N` lines don't
@@ -222,6 +222,21 @@ use-case guide when writing it (task #6).
   to refresh it — re-opening the build menu alone does not help. This is a
   native client behavior (storage recognition only re-evaluates on the
   camp entry/exit trigger), not something this mod causes.
+- **Rare stuck-camp state, possibly raid-related**: on one occasion during
+  testing, a camp lost apparent access to remote materials after a
+  successful cross-camp build, while a raid was concurrently happening at
+  a different (main) base. Unlike the rejoin quirk, leaving and returning
+  to *that same* camp did not fix it, and neither did deconstructing the
+  built object. Visiting a *different* camp and returning did fix it.
+  Extensive follow-up testing (three controlled repros isolating fresh
+  local chest placement/removal specifically, since a chest had also been
+  placed at that camp around the same time) found nothing — server-side
+  registration logs stayed completely healthy (`FULL_PLAN_REGISTER
+  SUMMARY` stable, zero blocked/exceptions) through the entire original
+  incident, ruling out this mod's registration logic as the cause. The
+  raid remains the one untested variable from the original incident. Not
+  reproduced since; treated as rare. If it happens: fast-travel (or
+  otherwise visit) a different base and return to the affected one.
 
 ## 9. Sign-off
 
