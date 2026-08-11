@@ -124,6 +124,20 @@ This is the actual reported bug and its fix — test it precisely, not just
 - [x] **Primary repro**: confirmed — built a bench at a camp using only
       "offsite" (foreign same-guild camp) materials, with the client mod
       disabled, checklist showing correct totals.
+- [x] **Rejoin-while-inside-camp refresh behavior** (found during testing,
+      not a bug — see §8 for release-notes writeup): after reconnecting
+      while still positioned inside a camp's boundary, cross-camp materials
+      briefly showed as unavailable again despite server-side registration
+      being completely unaffected (`FULL_PLAN_REGISTER SUMMARY` stable at
+      `planned=285 attempted=285 completed=285 blocked=0 exceptions=0`
+      across the whole window, no `WORLD state reset`). Re-opening the
+      build menu alone did not fix it; walking out of the camp's radius and
+      back in did. Root cause: the native client only re-evaluates nearby
+      storage on the `OnEnterBaseCamp` boundary-crossing trigger, and a
+      rejoin that spawns the player already inside that boundary never
+      fires it — purely a native client-side refresh quirk, not something
+      this mod causes or can silently fix without hooking client code
+      again (out of scope per the server-only release decision).
 - [ ] **Consumption location check** (important — this is different from
       the reverted Stage 4F.1 design): the executor *registers* a foreign
       chest into the local camp's storage module, it does not move items.
@@ -194,7 +208,22 @@ Confirm the mod doesn't break existing native systems it sits next to.
       but worth confirming explicitly since it's the kind of assumption
       that's easy to get subtly wrong)
 
-## 8. Sign-off
+## 8. Known behavior to carry into release notes
+
+Running list of real, confirmed, non-bug behaviors discovered during
+testing that users should be told about up front rather than discover
+themselves and mistake for a problem. Pull this list directly into the
+use-case guide when writing it (task #6).
+
+- **Rejoin-while-inside-a-camp refresh**: if you reconnect to the server
+  while already standing inside a base camp's boundary, the build menu may
+  briefly not reflect guild-wide materials from other camps, even though
+  nothing is actually wrong server-side. Walk out of the camp and back in
+  to refresh it — re-opening the build menu alone does not help. This is a
+  native client behavior (storage recognition only re-evaluates on the
+  camp entry/exit trigger), not something this mod causes.
+
+## 9. Sign-off
 
 - [ ] Sections 0-2 and 4-7 (the release-blocking ones) checked off with no
       unresolved failures — Section 3 is explicitly out of scope per §0
@@ -208,3 +237,4 @@ Confirm the mod doesn't break existing native systems it sits next to.
       recommended; if you already have the Steam Workshop/NexusMods
       Integrated Storage client mod installed, remove it (it's not just
       unnecessary now, the unpatched version can still crash you)
+- [ ] Section 8's known-behavior list is folded into the use-case guide
