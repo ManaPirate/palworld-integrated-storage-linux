@@ -121,10 +121,9 @@ Connect with the freshly-built patched client (Stage 4E.4 fix).
 This is the actual reported bug and its fix — test it precisely, not just
 "did a build succeed somewhere."
 
-- [ ] **Primary repro**: at a non-main camp whose own real storage lacks a
-      recipe's materials (verify this first — check the camp's own chests
-      directly), attempt a build that the guild pool can cover. It should
-      succeed.
+- [x] **Primary repro**: confirmed — built a bench at a camp using only
+      "offsite" (foreign same-guild camp) materials, with the client mod
+      disabled, checklist showing correct totals.
 - [ ] **Consumption location check** (important — this is different from
       the reverted Stage 4F.1 design): the executor *registers* a foreign
       chest into the local camp's storage module, it does not move items.
