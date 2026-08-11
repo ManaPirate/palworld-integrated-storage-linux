@@ -39,16 +39,42 @@ before any client connects.
 - [ ] No `FMallocBinned2` / `LowLevelFatalError` / `Signal 11` in the first
       10 minutes of idle uptime
 
-## 2. Vanilla (unmodified) client compatibility
+## 2. Vanilla (unmodified) client compatibility AND capability
 
-Connect with a Steam Workshop / NexusMods client that does **not** have the
-mod installed.
+Connect with a Steam Workshop / NexusMods client, or no client mod at all.
+This section covers two distinct claims — don't conflate them:
+
+**2a. Non-disruption** (does the mod ever get in a vanilla client's way):
 
 - [ ] Client connects and plays normally — join, move, build something
       mundane, disconnect
 - [ ] `TRANSPORT_REQUEST` count stays at 0 for the whole session (the hook
       is inert without the exact `ISREQ|` sentinel)
 - [ ] Zero crashes, zero behavior change versus a completely unmodded server
+
+**2b. Cross-camp building actually works with zero client mod** (Stage 4F is
+purely server-authoritative — `OnAvailableConcreteModel_ServerInternal`
+registers the foreign chest as a genuinely native container of the local
+camp's storage module, so there is nothing for a client to opt into):
+
+- [x] **Confirmed 2026-08-11**: with the client mod fully disabled, placed a
+      building at a camp using materials held only at a different
+      ("offsite") same-guild camp. Placement succeeded — this is the core
+      feature working with a completely vanilla client.
+- [ ] **Follow-up to confirm precisely**: with the client mod disabled, does
+      the build menu's material checklist show the *correct* combined
+      total up front (no false "Insufficient materials" needing to be
+      overridden by attempting anyway), or does it show the camp's local
+      total only while placement still silently succeeds using the wider
+      pool? This determines whether the client mod's `injectMinted` display
+      feature is now fully redundant, or still adds value by surfacing
+      numbers the vanilla UI can't show.
+- [ ] If 2b holds up under repeat testing (different recipes, different
+      camps, different guild sizes), this changes the release shape:
+      the patched client DLL may become optional QoL rather than a
+      required companion download — re-evaluate the release plan's "ship
+      paired with a rebuilt client mod DLL" framing (§8 item 4,
+      `docs/linux-port-status.md`) once confirmed.
 
 ## 3. Patched client + display (Stage 4E transport)
 
