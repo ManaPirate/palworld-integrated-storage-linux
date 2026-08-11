@@ -160,11 +160,16 @@ This is the actual reported bug and its fix — test it precisely, not just
       confirmed a fresh chest placed then removed at the same empty-camp
       site (Test C) doesn't disturb this — see the known-behavior note
       below re: the one unreproduced incident that prompted this testing.
-- [ ] **Guild isolation**: with two separate guilds each holding camps on
-      the server, confirm guild A's materials are never visible or usable
-      at guild B's camps. Check `CHEST_GUILD id=... chests=N` lines don't
-      cross guild keys, and attempt (and expect to fail, correctly) a build
-      at guild B using a material only guild A's guild possesses.
+- [x] **Guild isolation**: confirmed — left the old guild and formed a new
+      one; at the new guild's camp, an item requiring an old-guild-exclusive
+      material was unbuildable/unselectable/greyed out, matching correct
+      "insufficient materials" behavior rather than just missing from the
+      list. Log evidence corroborates: across the sampled runs,
+      `guild_mismatches=0` held for all 8 guilds / 17 camps concurrently
+      active on the test server (not just the two involved in this test),
+      and each guild's `CHEST_GUILD id=... chests=N` count stayed stable
+      and distinct — the new guild's pool never absorbed the old guild's
+      chests.
 - [x] **Sustained `FULL_PLAN_REGISTER SUMMARY` sanity**: confirmed across
       hundreds of passes spanning multiple test sessions today (including
       through a chest placement/removal, several builds, and the raid
