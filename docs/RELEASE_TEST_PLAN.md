@@ -144,12 +144,16 @@ This is the actual reported bug and its fix — test it precisely, not just
       Parts stack went from 212 to 210, exactly matching the recipe cost,
       with nothing appearing in the local camp's own storage. Clean,
       exact, single-source consumption — no duplication, no drift.
-- [ ] **New camp mid-session**: with the server already running, found (or
-      have another player found) a brand-new same-guild base camp. Confirm
-      it shows up as `+1` in the next `FULL_PLAN_REGISTER SUMMARY
-      planned=N` (should increase without a server restart) within one
-      discovery pass (~8s), then confirm building at that new camp using
-      guild materials works.
+- [x] **New camp mid-session**: confirmed — deleted a base, waited, then
+      placed a fresh palbox with the server already running (no restart).
+      Live-followed logs captured two clean add/remove cycles (run 283→392
+      and run 599→619): `planned=`, `objects=`, and `camps=` all
+      incremented cleanly within one discovery pass of the topology change
+      (e.g. `planned=285→287 objects=157→158 camps=17→18`), `blocked=0
+      exceptions=0` throughout, with only the expected one-pass transient
+      `CHEST_ASSOC unassociated=1` blip on removal that self-healed on the
+      very next pass. User confirmed in-game that the newly placed base had
+      access to remote materials, matching the log evidence exactly.
 - [x] **Empty-camp target**: confirmed (Test A) — a camp with zero local
       chests successfully built two items back-to-back using only
       guild-pooled remote materials, checklist accurate throughout. Also
