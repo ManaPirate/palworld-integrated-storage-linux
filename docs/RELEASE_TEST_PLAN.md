@@ -198,11 +198,8 @@ Confirm the mod doesn't break existing native systems it sits next to.
 - [x] **Quick Stack**: confirmed — pulled a stack of items from personal
       inventory into a guild chest via Quick Stack, exited the menu, then
       reopened it and pulled the same items back out normally.
-- [N/A] **Item Retrieval Device**: not testable right now — the recent
-      guild restart (left old guild, formed new one) means the device
-      isn't currently available to test with. Revisit before final
-      sign-off if it becomes available again; otherwise note as untested
-      (not failed) in the release notes.
+- [x] **Item Retrieval Device**: confirmed on the production server — works
+      normally, no interference from the mod.
 - [x] **Native Guild Chest UI**: confirmed — the same Quick Stack
       round-trip above was done through the built-in (non-mod) guild
       storage view; opened/closed/re-opened normally, contents accurate
