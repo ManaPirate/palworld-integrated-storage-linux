@@ -448,15 +448,6 @@ namespace
 
     std::atomic_bool g_build_gate_hooks_registered{false};
 
-    // Unconditional fire counters, bumped in the PRE hooks before any of
-    // this mod's own gating/lookups run. Diagnostic-only: answers whether
-    // these UFunctions are actually invoked on a dedicated server at all
-    // (as opposed to being purely local/client-predicted, in which case
-    // no amount of correct offset/lookup logic here would ever run).
-    std::atomic_uint64_t g_enter_base_camp_hook_fires{0};
-    std::atomic_uint64_t g_exit_base_camp_hook_fires{0};
-    std::atomic_uint64_t g_material_check_hook_fires{0};
-
     template <std::size_t Size>
     auto emit_marker(const char (&message)[Size]) noexcept -> void
     {
@@ -3080,10 +3071,6 @@ namespace
         void*
     ) -> void
     {
-        g_enter_base_camp_hook_fires.fetch_add(
-            1,
-            std::memory_order_relaxed
-        );
     }
 
     auto on_enter_base_camp_hook_post(
@@ -3121,15 +3108,6 @@ namespace
         if (camp != nullptr)
         {
             g_player_current_camp[context.Context] = camp;
-
-            emit_format(
-                "[ModIntegratedStorageCpp] "
-                "BUILD_CAMP_ENTER owner=%p camp=%p "
-                "tracked=%zu",
-                static_cast<void*>(context.Context),
-                static_cast<void*>(camp),
-                g_player_current_camp.size()
-            );
         }
     }
 
@@ -3138,10 +3116,6 @@ namespace
         void*
     ) -> void
     {
-        g_exit_base_camp_hook_fires.fetch_add(
-            1,
-            std::memory_order_relaxed
-        );
     }
 
     auto on_exit_base_camp_hook_post(
@@ -3159,13 +3133,6 @@ namespace
         }
 
         g_player_current_camp.erase(context.Context);
-
-        emit_format(
-            "[ModIntegratedStorageCpp] "
-            "BUILD_CAMP_EXIT owner=%p tracked=%zu",
-            static_cast<void*>(context.Context),
-            g_player_current_camp.size()
-        );
     }
 
     auto on_build_material_check_hook_pre(
@@ -3173,10 +3140,6 @@ namespace
         void*
     ) -> void
     {
-        g_material_check_hook_fires.fetch_add(
-            1,
-            std::memory_order_relaxed
-        );
     }
 
     auto on_build_material_check_hook_post(
@@ -3202,18 +3165,6 @@ namespace
 
         if (camp_iterator == g_player_current_camp.end())
         {
-            // Logged every fire deliberately, for now: this is the
-            // exact branch that would silently explain zero
-            // MATERIAL_RECONCILE activity if OnEnterBaseCamp never
-            // populated the map for this player/camp combination.
-            emit_format(
-                "[ModIntegratedStorageCpp] "
-                "BUILD_MATERIAL_CHECK owner=%p "
-                "RESULT=CAMP_NOT_TRACKED tracked=%zu",
-                static_cast<void*>(context.Context),
-                g_player_current_camp.size()
-            );
-
             return;
         }
 
@@ -3222,11 +3173,6 @@ namespace
                 MaxPendingMaterialChecks
         )
         {
-            emit_marker(
-                "[ModIntegratedStorageCpp] "
-                "BUILD_MATERIAL_CHECK RESULT=QUEUE_FULL"
-            );
-
             return;
         }
 
@@ -3264,14 +3210,6 @@ namespace
         }
 
         g_pending_material_checks.push_back(check);
-
-        emit_format(
-            "[ModIntegratedStorageCpp] "
-            "BUILD_MATERIAL_CHECK RESULT=QUEUED camp=%p "
-            "queued=%zu",
-            static_cast<void*>(check.camp),
-            g_pending_material_checks.size()
-        );
     }
 
     auto on_transport_request_hook_pre(
@@ -15259,31 +15197,6 @@ namespace
                 "TRANSPORT_CACHE camps=%zu guilds=%zu",
                 g_cached_camp_id_to_camp.size(),
                 g_cached_registration_plan.size()
-            );
-
-            emit_format(
-                "[ModIntegratedStorageCpp] "
-                "BUILD_GATE_ACTIVITY "
-                "enter_fires=%llu exit_fires=%llu "
-                "check_fires=%llu tracked=%zu "
-                "pending=%zu",
-                static_cast<unsigned long long>(
-                    g_enter_base_camp_hook_fires.load(
-                        std::memory_order_relaxed
-                    )
-                ),
-                static_cast<unsigned long long>(
-                    g_exit_base_camp_hook_fires.load(
-                        std::memory_order_relaxed
-                    )
-                ),
-                static_cast<unsigned long long>(
-                    g_material_check_hook_fires.load(
-                        std::memory_order_relaxed
-                    )
-                ),
-                g_player_current_camp.size(),
-                g_pending_material_checks.size()
             );
         }
 
