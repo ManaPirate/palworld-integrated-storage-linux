@@ -161,9 +161,12 @@ This is the actual reported bug and its fix — test it precisely, not just
       at guild B's camps. Check `CHEST_GUILD id=... chests=N` lines don't
       cross guild keys, and attempt (and expect to fail, correctly) a build
       at guild B using a material only guild A's guild possesses.
-- [ ] Sustained `FULL_PLAN_REGISTER SUMMARY` sanity across the whole
-      session: `blocked` and `exceptions` stay at 0 throughout, not just at
-      the first pass.
+- [x] **Sustained `FULL_PLAN_REGISTER SUMMARY` sanity**: confirmed across
+      hundreds of passes spanning multiple test sessions today (including
+      through a chest placement/removal, several builds, and the raid
+      incident) — `blocked=0 exceptions=0` held the entire time, only
+      `planned=`/`objects=` ever moved, and only in response to real
+      topology changes (chest added/removed).
 
 ## 5. Stability / soak
 
