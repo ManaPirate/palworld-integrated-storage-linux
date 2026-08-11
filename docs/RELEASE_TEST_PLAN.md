@@ -61,20 +61,21 @@ camp's storage module, so there is nothing for a client to opt into):
       building at a camp using materials held only at a different
       ("offsite") same-guild camp. Placement succeeded — this is the core
       feature working with a completely vanilla client.
-- [ ] **Follow-up to confirm precisely**: with the client mod disabled, does
-      the build menu's material checklist show the *correct* combined
-      total up front (no false "Insufficient materials" needing to be
-      overridden by attempting anyway), or does it show the camp's local
-      total only while placement still silently succeeds using the wider
-      pool? This determines whether the client mod's `injectMinted` display
-      feature is now fully redundant, or still adds value by surfacing
-      numbers the vanilla UI can't show.
-- [ ] If 2b holds up under repeat testing (different recipes, different
-      camps, different guild sizes), this changes the release shape:
-      the patched client DLL may become optional QoL rather than a
-      required companion download — re-evaluate the release plan's "ship
-      paired with a rebuilt client mod DLL" framing (§8 item 4,
-      `docs/linux-port-status.md`) once confirmed.
+- [x] **Confirmed 2026-08-11**: with the client mod disabled, the build
+      menu's material checklist *also* showed the correct combined total
+      up front — no false "Insufficient materials," no need to override by
+      attempting anyway. Both display and consumption are fully native,
+      fully server-authoritative. The client mod's `injectMinted` display
+      feature is redundant for this case.
+- [ ] Repeat-test under more conditions before treating this as fully
+      general: different recipes (more than 4 materials worth spread
+      across camps, edge-case item types), larger guild sizes, a camp with
+      partial local + partial foreign stock (not just fully-foreign), and
+      at least one more player/session to rule out a one-off.
+- [x] **Release-shape decision needed**: this changes what "release" even
+      means — see conversation with the user, decision pending on whether
+      to keep shipping the patched client DLL at all, and if so, what its
+      remaining value proposition is (if any).
 
 ## 3. Patched client + display (Stage 4E transport)
 
