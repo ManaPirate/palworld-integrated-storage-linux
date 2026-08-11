@@ -179,17 +179,26 @@ This is the actual reported bug and its fix — test it precisely, not just
 
 ## 5. Stability / soak
 
-- [ ] Extended session — 2+ continuous hours with the mod active and at
-      least one player connected on and off throughout
-- [ ] Multiple concurrent players from different guilds active
-      simultaneously
-- [ ] Full server restart mid-test (stop/start the container) — clean
-      re-registration from scratch afterward (`FULL_PLAN_REGISTER
-      SUMMARY planned=N` reappears with the same or higher `N`), no crash
-      on restart
-- [ ] Memory (`VmRSS`) growth over the soak window stays bounded/roughly
-      linear, consistent with the already-accepted Stage 4D.9f leak-and-
-      cache growth curve — not a new unbounded leak introduced by Stage 4F
+- [x] **Extended session**: confirmed — this production deploy session
+      alone ran well over 2 continuous hours with the mod active and
+      players connecting on and off throughout, `blocked=0 exceptions=0`
+      held the entire time.
+- [x] **Multiple concurrent players from different guilds**: confirmed —
+      the production server carried 7-8 active guilds and ~20 camps live
+      simultaneously throughout, with real players from at least two of
+      them actively building/deconstructing during testing.
+- [x] **Full server restart mid-test**: confirmed — restarted the
+      production container with two players online; clean re-registration
+      afterward, no crash. One player hit the already-documented
+      rejoin-while-inside-camp refresh quirk (§8) immediately after
+      reconnecting, resolved by fast-traveling — expected, not a new
+      issue.
+- [ ] **Memory (`VmRSS`) growth**: in progress — baseline to be taken
+      after tomorrow's scheduled 04:30 server restart, with a follow-up
+      reading later to check the trend stays bounded/roughly linear (not
+      a new unbounded leak beyond the already-accepted Stage 4D.9f
+      leak-and-cache curve). Interim reading taken mid-session:
+      `VmRSS: 4406576 kB` (~4.2 GB).
 
 ## 6. Non-interference / regression
 
@@ -210,22 +219,28 @@ Confirm the mod doesn't break existing native systems it sits next to.
 
 ## 7. Edge cases
 
-- [ ] Solo player, no guild — mod should be a no-op for them, no crashes,
-      no phantom pool data
-- [ ] A camp is dismantled entirely mid-session — subsequent discovery
-      passes handle its removal cleanly (no dangling pointer crashes, no
-      stale `CHEST_GUILD` entries)
+- [x] **Solo player, no guild**: N/A by design — a Palworld dedicated
+      server auto-assigns every player to an (initially unnamed) guild, so
+      a true guildless state doesn't exist to test. The closest real case,
+      a player briefly between guilds, was already covered by the
+      leave-guild-mid-session test (§4/§7) with no crash or phantom data.
+- [x] **A camp is dismantled entirely mid-session**: confirmed — same
+      evidence as the "new camp mid-session" test (§4): base deletion was
+      observed to drop out of `DISCOVERY`/`CHEST_GUILD`/`FULL_PLAN_REGISTER`
+      cleanly on the very next pass, with no dangling entries and no
+      crash.
 - [x] **A player leaves their guild mid-session**: confirmed — covered by
       the guild-isolation test (leave old guild, form new one, place a new
       camp) done live on the running server. No crash; `CHEST_ASSOC
       RESULT=PASS` with `unassociated=0` held throughout, re-association
       settled cleanly with no dangling/stale `CHEST_GUILD` entries left
       behind for the old membership.
-- [ ] Two different guilds with camps in close physical proximity — confirm
-      no spatial/proximity-based leakage (cross-registration here is
-      guild-key-based, not distance-based, so this should be a clean pass,
-      but worth confirming explicitly since it's the kind of assumption
-      that's easy to get subtly wrong)
+- [x] **Two different guilds with camps in close physical proximity**:
+      confirmed — three guilds actually, tested by placing a base near
+      multiple guilds' camps and checking at several points around it
+      whether their materials leaked in. No bleed observed; cross-
+      registration held strictly guild-key-based, not distance-based, as
+      designed.
 
 ## 8. Known behavior to carry into release notes
 
