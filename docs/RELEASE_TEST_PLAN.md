@@ -218,8 +218,12 @@ Confirm the mod doesn't break existing native systems it sits next to.
 - [ ] A camp is dismantled entirely mid-session — subsequent discovery
       passes handle its removal cleanly (no dangling pointer crashes, no
       stale `CHEST_GUILD` entries)
-- [ ] A player leaves their guild mid-session — no crash, camp
-      re-associates correctly on the next pass
+- [x] **A player leaves their guild mid-session**: confirmed — covered by
+      the guild-isolation test (leave old guild, form new one, place a new
+      camp) done live on the running server. No crash; `CHEST_ASSOC
+      RESULT=PASS` with `unassociated=0` held throughout, re-association
+      settled cleanly with no dangling/stale `CHEST_GUILD` entries left
+      behind for the old membership.
 - [ ] Two different guilds with camps in close physical proximity — confirm
       no spatial/proximity-based leakage (cross-registration here is
       guild-key-based, not distance-based, so this should be a clean pass,
