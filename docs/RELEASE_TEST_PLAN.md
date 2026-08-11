@@ -195,15 +195,18 @@ This is the actual reported bug and its fix — test it precisely, not just
 
 Confirm the mod doesn't break existing native systems it sits next to.
 
-- [ ] Quick Stack (native chest-to-inventory quick-stack) still works
-      normally on guild chests
+- [x] **Quick Stack**: confirmed — pulled a stack of items from personal
+      inventory into a guild chest via Quick Stack, exited the menu, then
+      reopened it and pulled the same items back out normally.
 - [ ] Item Retrieval Device (if applicable to your game version) still
       works normally
-- [ ] The native Guild Chest UI (non-mod, built-in guild storage view)
-      still displays and behaves correctly
-- [ ] Normal solo (non-cross-camp) building and crafting is completely
-      unaffected — a camp with its own sufficient local materials builds
-      exactly as it would with no mod installed
+- [x] **Native Guild Chest UI**: confirmed — the same Quick Stack
+      round-trip above was done through the built-in (non-mod) guild
+      storage view; opened/closed/re-opened normally, contents accurate
+      throughout.
+- [x] **Normal solo (non-cross-camp) building**: confirmed — built a metal
+      chest at a camp using only that camp's own local materials; behaved
+      exactly as expected with no mod interference.
 
 ## 7. Edge cases
 
