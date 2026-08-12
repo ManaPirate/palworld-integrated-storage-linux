@@ -35,21 +35,23 @@ If you already have it installed, remove it before connecting.
 - A Palworld dedicated server running natively on Linux (x86-64)
 - [NullPrism RE-UE4SS-Linux](https://github.com/NullPrism/RE-UE4SS-Linux)
   already installed and working on that server
-- The `main.so` build from this repository's release
+- The `ModIntegratedStorageCpp.zip` drop-in package from this repository's
+  release
 
 ## Installing
 
-1. **Stop the server.** Copying a new `main.so` into a live mount while
-   the server process still has the old one mapped can produce a spurious
+1. **Stop the server.** Copying mod files into a live mount while the
+   server process still has the old ones mapped can produce a spurious
    crash on the next start — always stop first, copy, then start back up.
-2. Copy the release's `main.so` into:
+2. Extract `ModIntegratedStorageCpp.zip` directly into your server's
+   `Mods` folder:
    ```
-   <server root>/Pal/Binaries/Linux/Mods/ModIntegratedStorageCpp/dlls/main.so
+   <server root>/Pal/Binaries/Linux/Mods/
    ```
-   Create the `ModIntegratedStorageCpp` and `dlls` folders if they don't
-   already exist. Also drop an empty `enabled.txt` file directly inside
-   `ModIntegratedStorageCpp/` (next to `dlls/`, not inside it) — this is
-   how RE-UE4SS-Linux knows to load the mod.
+   This drops in the whole `ModIntegratedStorageCpp/` folder already laid
+   out correctly — `dlls/main.so`, the `enabled.txt` marker RE-UE4SS-Linux
+   needs to load it, and a `BUILD-PROVENANCE.txt` recording exactly which
+   commit/build this is. Nothing to assemble by hand.
 3. **Start the server.**
 4. Confirm a clean startup by tailing the server's logs and checking for
    these lines, all from `[ModIntegratedStorageCpp]`:
