@@ -307,16 +307,20 @@ use-case guide when writing it (task #6).
 
 ## 9. Sign-off
 
-- [ ] Sections 0-2 and 4-7 (the release-blocking ones) checked off with no
+- [x] Sections 0-2 and 4-7 (the release-blocking ones) checked off with no
       unresolved failures — Section 3 is explicitly out of scope per §0
-- [ ] Any deviations/failures found during testing are either fixed and
-      re-verified, or explicitly documented as a known limitation in
-      `docs/linux-port-status.md` before release
-- [ ] `docs/linux-port-status.md` §9 stage log updated with the final
-      soak-test evidence (mirroring how every other accepted stage in this
-      project is recorded)
-- [ ] Release notes explicitly state: no client-side mod needed or
+- [x] Any deviations/failures found during testing are either fixed and
+      re-verified, or explicitly documented as a known limitation — the
+      rejoin-refresh quirk and rare stuck-camp state (§8) are both
+      documented, not fixes-pending; the isolated GPU-related client
+      disconnect was traced to the affected player's own hardware, not
+      the mod
+- [x] `docs/linux-port-status.md` §9 stage log updated with the final
+      soak-test evidence (`Release v1.0.0` entry, top of the table)
+- [x] Release notes explicitly state: no client-side mod needed or
       recommended; if you already have the Steam Workshop/NexusMods
       Integrated Storage client mod installed, remove it (it's not just
-      unnecessary now, the unpatched version can still crash you)
-- [ ] Section 8's known-behavior list is folded into the use-case guide
+      unnecessary now, the unpatched version can still crash you) — see
+      the release notes draft and `docs/USER_GUIDE.md`
+- [x] Section 8's known-behavior list is folded into the use-case guide
+      (`docs/USER_GUIDE.md`, "Known behavior (not bugs)")

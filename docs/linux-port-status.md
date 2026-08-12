@@ -336,69 +336,50 @@ over copying into a live mount.
 
 ## 8. Immediate next action
 
-Stage 4E.1-4E.3 (§9) got the server-side `ISREQ`/`IS1` wire handler (§4)
-implemented, built, deployed, and fixed after a real crash. Retesting
-against a **real client running the actual upstream Windows mod** (Steam
-Workshop build) then produced the first fully successful end-to-end round
-trip: three clean `TRANSPORT_REQUEST queued=1` -> `TRANSPORT_REQUEST
-RESULT=SENT items=272 len=5664` cycles, zero server-side crashes, and the
-tester directly confirmed cross-camp materials were visible and usable
-in-game. The separate, pre-existing UE4SS/Proton connect-crash blocker
-(previously item 3 here) is also resolved for testing purposes: swapping
-the vanilla `UE4SS-RE/RE-UE4SS` release for the community
-`Okaetsu/RE-UE4SS` Palworld fork (`experimental-palworld` tag,
-`UE4SS-Palworld.zip`, ships a `MemberVariableLayout.ini` fixing a
-`UEnum`-layout shift Palworld's own engine edits introduced) let a real
-client connect and play a full session — the underlying UE4SS-side bug is
-still open upstream (UE4SS-RE/RE-UE4SS#1339) but is no longer a blocker
-here.
+**Released as v1.0.0.** Stage 4F (§9) — promoting the cross-registration
+executor to permanent/periodic — closed the last known functional gap and
+turned out to make the whole feature fully server-authoritative:
+`OnAvailableConcreteModel_ServerInternal` makes each foreign, same-guild
+chest a genuinely native container of the local camp's storage module, at
+the engine level. Extensive follow-up testing (`docs/RELEASE_TEST_PLAN.md`,
+including a multi-hour multi-guild production soak) confirmed both the
+build-menu display *and* actual material consumption work correctly with
+**zero client-side mod installed** — a completely vanilla client sees
+correct combined totals and can build from them, because the game's own
+code genuinely can't tell a cross-registered chest from a real local one.
 
-That success immediately surfaced Stage 4E.4 (§9): a **new, client-side**
-crash, distinct from every crash before it in this project. Minidump
-forensics (see 4E.4 stage-log entry) pinned it to a real bug in the
-upstream client mod's own `src/dllmain.cpp`, in the `injectMinted()`
-transient array-swap that displays the guild pool in-game — not anything
-in this repo's Linux server code. Fixed in this repo's copy of
-`dllmain.cpp`; **not yet build- or runtime-verified** (no Windows/UE4SS
-SDK toolchain in this environment) — see item 1 below.
+This changed the release shape from the original plan (item 4 in this
+section, historical, superseded): rather than shipping a rebuilt client mod
+DLL alongside the server fix, the release ships **server-only**. The
+patched client `dllmain.cpp` (Stage 4E.4's `injectMinted`/`restoreMinted`
+`FMemory`-backed fix) is kept in this repo only for a possible separate
+contribution back to Sarfflow's original upstream project, where it still
+matters (that project targets listen-server/host setups, not this Linux
+dedicated-server port) — it is explicitly **not** part of this project's
+release and was never build/runtime-verified here (no Windows/UE4SS SDK
+toolchain in this environment). See `docs/RELEASE_TEST_PLAN.md` §3 and §0
+for the full scope-decision record, and `docs/USER_GUIDE.md` for the
+install guide and known-behavior notes carried into the release.
 
-1. **Build and test the Stage 4E.4 client fix.** `src/dllmain.cpp`'s
-   `injectMinted`/`restoreMinted` now allocate/free the transient swap
-   buffer via `RC::Unreal::FMemory::Malloc`/`Free` (GMalloc-backed)
-   instead of a `std::vector` CRT-heap buffer, so a native realloc/free
-   against it lands on a block the game's own `FMallocBinned2` actually
-   recognizes. This needs: (a) a clean Windows build against the real
-   UE4SS SDK headers (confirm `Unreal/FMemory.hpp` and the
-   `FMemory::Malloc(size_t)` / `FMemory::Free(void*)` signatures compile
-   as expected — verified by reading UE4SS's own internal source, not by
-   compiling here), and (b) a repeat of the exact session that crashed:
-   enter a camp with a large guild pool (272+ items reproduced it),
-   trigger several menu-opens back to back (the crash log showed 7
-   `injectMinted` calls in one frame just before it), watch for
-   `FMallocBinned2`/`LowLevelFatalError` — there should be none.
-2. ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2.
-3. ~~Rebuild/redeploy the Stage 4E.3 fix and retry the real-client `ISREQ`
-   test~~ — done, Stage 4E.4. Three clean round trips, zero server-side
-   crashes, materials confirmed visible/usable in-game. Both open
-   assumptions from Stage 4E.1 are now empirically confirmed: hooking
-   `Debug_CheatCommand_ToServer` via `RegisterHook` is a safe call context,
-   and a raw leaked-buffer `RawTArray` is accepted by `ProcessEvent` as a
-   valid outbound `FString` parameter.
-4. **Release packaging.** Given the Stage 4E.4 client bug, anyone using
-   this Linux server with an unpatched client mod build can hit this exact
-   crash under normal play (it took a real base, not a contrived stress
-   test, to trigger it). A release of this dedicated server should ship
-   paired with a rebuilt client mod DLL carrying the Stage 4E.4 fix (or at
-   minimum, prominent release notes pointing at it) rather than pointing
-   users at the unpatched Steam Workshop/NexusMods build.
-5. ~~Independently of FName serialization: still need a periodic/topology-aware
-   registration reconcile executor (§3 known gap)~~ — done, Stage 4F. The
-   arm-file gate and one-shot latch are both removed; cross-registration
-   (`OnAvailableConcreteModel_ServerInternal`, via `run_controlled_full_plan_
-   registration`) now runs unconditionally every discovery pass. Verified
-   in-game against a real "Insufficient build materials" report: a clean
-   `285/285` registration pass immediately fixed the reported build, with
-   the tester also noting materially reduced server lag.
+Historical record of the two items this section used to track, both
+resolved:
+
+- ~~Build, deploy, and monitor Stage 4E.1~~ — done, Stage 4E.2.
+- ~~Rebuild/redeploy the Stage 4E.3 fix and retry the real-client `ISREQ`
+  test~~ — done, Stage 4E.4. Three clean round trips, zero server-side
+  crashes, materials confirmed visible/usable in-game. Both open
+  assumptions from Stage 4E.1 are now empirically confirmed: hooking
+  `Debug_CheatCommand_ToServer` via `RegisterHook` is a safe call context,
+  and a raw leaked-buffer `RawTArray` is accepted by `ProcessEvent` as a
+  valid outbound `FString` parameter.
+- ~~Independently of FName serialization: still need a periodic/topology-aware
+  registration reconcile executor (§3 known gap)~~ — done, Stage 4F. The
+  arm-file gate and one-shot latch are both removed; cross-registration
+  (`OnAvailableConcreteModel_ServerInternal`, via `run_controlled_full_plan_
+  registration`) now runs unconditionally every discovery pass. Verified
+  in-game against a real "Insufficient build materials" report: a clean
+  `285/285` registration pass immediately fixed the reported build, with
+  the tester also noting materially reduced server lag.
 
 Stage 4d.8h scope (fallback, not currently the priority): offline PalServer
 FName resolver + bounded disassembly. Re-verify PalServer SHA256, copy into
@@ -420,6 +401,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Release v1.0.0 | **Shipped, server-only.** Fast-forwarded `claude/palworld-linux-storage-mod-gx9n5d` (containing every accepted stage through 4F plus the full release validation) directly onto `main` — a strict ancestor relationship, so no merge conflicts. Full release validation (`docs/RELEASE_TEST_PLAN.md`) ran across the isolated NullPrism test server and then a multi-hour real production deploy (7-8 concurrent guilds, ~20 camps, multiple players): clean startup markers, `blocked=0 exceptions=0` sustained for hours, zero `FMallocBinned2`/crash markers, guild isolation confirmed (including an actual leave-guild/new-guild test), cross-camp consumption confirmed exact (verified material counts at the true source, not just the destination), a full production container restart mid-session recovered cleanly, and `VmRSS` growth over a 2-hour window was ~3.6 MB — negligible, consistent with the already-accepted Stage 4D.9f leak-and-cache curve. One isolated client disconnect during a deconstruct attempt was investigated and traced to the affected player's own GPU instability (self-diagnosed, not reproduced by a second player performing the identical action), not a mod defect. Release ships `main.so` only — see §8 for the scope decision and `docs/USER_GUIDE.md` for the install guide and known-behavior notes (rejoin-while-inside-camp refresh quirk, rare stuck-camp state) carried forward from `RELEASE_TEST_PLAN.md` §8. |
 | 4F | **Accepted, verified in-game.** Root-caused and fixed a real user report ("Insufficient build materials" on a Large Pal Bed at a non-main camp, despite the build checklist showing far more than needed). Two false starts before the real fix, both reverted cleanly (`bdf5712`, `7f49271`, `317ec88`) rather than left in place: first hooked `PalBuilderComponent:OnEnterBaseCamp`/`OnExitBaseCamp`/`IsExistsMaterialForBuildObject` to track camps and intercept material checks, then added a diagnostic probe on `PalNetworkPlayerComponent:RequestBuild_ToServer` when the first attempt showed zero hook fires across a real test session — proving those `PalBuilderComponent` functions are client-predicted only and never execute on a dedicated server at all, which no amount of correct offset math could have fixed. Checking the upstream Windows mod's own `dllmain.cpp` (`srvDiscoverReconcile()`) showed the real, working mechanism: periodically call `OnAvailableConcreteModel_ServerInternal` directly on each camp's storage module for every foreign same-guild chest's concrete model, so the *native* game code treats it as one of that camp's own registered containers — no build/craft function hooked or faked at all. This repo already had that exact executor (`run_controlled_full_plan_registration`, calling the identical `OnAvailableConcreteModel_ServerInternal`, with careful per-pair guild/camp/class/function validation), built and wired into the live discovery tick back in Stage 4d.7a — but gated behind a `.stage4d7a-arm` file that had never been created, and further limited to firing exactly once per process lifetime even when armed (`g_full_plan_registration_attempted`, a `compare_exchange_strong` latch). Armed it manually first to validate: `FULL_PLAN_REGISTER SUMMARY planned=285 attempted=285 completed=285 blocked=0 exceptions=0` → `RESULT=PASS`, and the reported build immediately started working, with the tester also noting materially reduced server lag. Promoted to permanent production behavior: removed the arm-file gate (`stage4d7a_arm_file_present()` deleted) and the one-shot latch, so the executor now runs unconditionally on every discovery pass (~8s) against the freshly-rebuilt `planned_execution_pairs` for that pass — matching the upstream mod's own reconcile cadence exactly, and closing the previously-open "one-shot misses camps created after startup" gap (§8 item 5, prior entries) as a side effect. Re-registering an already-registered pair was already proven idempotent by the upstream mod calling it unconditionally every pass with no de-duplication. |
 | 4E.4 | Two results. (1) **Accepted, verified.** Rebuilt/redeployed the Stage 4E.3 server fix and retested against a real client running the actual upstream Windows mod (Steam Workshop). Three clean round trips over a ~5 minute, 37-discovery-cycle window, including a disconnect/reconnect: `TRANSPORT_REQUEST queued=1` -> `TRANSPORT_REQUEST RESULT=SENT items=272 len=5664`, zero crashes; tester confirmed cross-camp materials visible and usable in-game. First complete end-to-end validation of the whole Stage 4E transport feature. (2) **New bug found and fixed, not yet build/runtime-verified.** Immediately after those three successful round trips, the client crashed: `LowLevelFatalError [File:...MallocBinned2.cpp] [Line: 1430] FMallocBinned2 Attempt to realloc an unrecognized block ... canary == 0x0 != 0xe3`. Diagnosed via direct binary parsing of the client's `UEMinidump.dmp` (had to fix an offset bug in the ad-hoc parser's `MINIDUMP_MODULE.ModuleNameRva` field first — was reading `TimeDateStamp` instead) plus UTF-16 string extraction, which recovered the exact UE fatal-error text; correlated against `UE4SS.log` timestamps (crash landed right after a 4th `CH request sent`, moments after 7 `injectMinted` calls fired in one frame at an earlier menu-open). Root cause, in the client mod's own `src/dllmain.cpp` (not this repo's Linux server code): `injectMinted()` transiently points a real `UPalItemContainer`'s `ItemSlotArray.data` at a `std::vector<UObject*>` buffer (CRT heap) so a native material-availability scan can read the guild pool's minted slots; at scale (272 minted + 230 real slots, several scans back to back) that closed-source native scan evidently reallocated/freed the array it was handed, and since the buffer was never actually allocated by the game's `FMallocBinned2`, the free/realloc bookkeeping had no canary for it — same crash class as Stage 4E.3's `FindAllOf` bug (foreign-allocator memory handed to code that assumes it owns the allocator), different mechanism (pointer-aliasing into a live TArray vs. destroying a cross-DSO vector). Fixed by switching `injectMinted`/`restoreMinted` to allocate/free the swap buffer via `RC::Unreal::FMemory::Malloc`/`Free` (confirmed as the real public SDK API by reading UE4SS's own internal source, which uses it identically) instead of the CRT heap, so any native realloc/free against it is now valid. Needs a Windows build + retest before shipping (§8 item 1). |
 | 4E.3 | Bug found and fixed. First real `ISREQ` from an actual client reached the server (`TRANSPORT_REQUEST queued=1` logged), then the server crashed before replying (`FMallocBinned2 ... canary == 0x0 != 0xb7`, `Signal 11`, matching the exact §5 destructor-crossing-DSO signature). Root cause: `get_transport_container_manager()` passed a local `std::vector` to `FindAllOf`; `FindAllOf` grows that vector via `libUE4SS.so`'s allocator, and destroying it on function return (every request) freed that storage from `main.so` — the identical hazard Stage 4a's hardening notes already documented and fixed everywhere else in this file, missed in this one new function. Fixed by switching to the same process-lifetime heap-vector pattern (`static auto* managers = new std::vector<...>(); managers->clear();`) already used at every other `FindAllOf` call site. Diagnosed via direct binary parsing of the client-side UE4SS minidump (confirmed fault was inside `UE4SS.dll`, unrelated to this bug) plus server-side `docker logs` correlation (confirmed the server-side crash, separate from the client-side UE4SS/Proton connect crash tracked in §8 item 3). |

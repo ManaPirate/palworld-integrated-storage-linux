@@ -37,11 +37,21 @@ The Linux port targets dedicated servers only.
 Listen servers, single-player sessions, client UI integration, and native
 Windows builds are outside the current scope.
 
+## Installing
+
+See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for install steps, how it
+behaves for players, and known quirks. Short version: this is a
+**server-only** release — install `main.so` on the dedicated server and
+nothing on the client. Do not install any client-side Integrated Storage
+mod; it's unnecessary and the unpatched Steam Workshop/NexusMods build can
+still crash clients on a large guild pool.
+
 ## Engineering record
 
-Linux port engineering documentation lives in a single file:
+Linux port engineering documentation lives in two files:
 
-- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, immediate next stage, and a chronological stage-by-stage log.
+- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, and a chronological stage-by-stage log.
+- [`docs/RELEASE_TEST_PLAN.md`](docs/RELEASE_TEST_PLAN.md) — the full release validation checklist and results.
 
 ## Attribution
 
