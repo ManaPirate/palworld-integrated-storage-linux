@@ -193,12 +193,13 @@ This is the actual reported bug and its fix — test it precisely, not just
       rejoin-while-inside-camp refresh quirk (§8) immediately after
       reconnecting, resolved by fast-traveling — expected, not a new
       issue.
-- [ ] **Memory (`VmRSS`) growth**: in progress — baseline to be taken
-      after tomorrow's scheduled 04:30 server restart, with a follow-up
-      reading later to check the trend stays bounded/roughly linear (not
-      a new unbounded leak beyond the already-accepted Stage 4D.9f
-      leak-and-cache curve). Interim reading taken mid-session:
-      `VmRSS: 4406576 kB` (~4.2 GB).
+- [x] **Memory (`VmRSS`) growth**: confirmed — two readings taken 2 hours
+      apart on the live production server post-restart: `3299164 kB` ->
+      `3302876 kB`, a growth of ~3.6 MB over 2 hours. Negligible and
+      consistent with the already-accepted Stage 4D.9f leak-and-cache
+      curve, not a new unbounded leak from Stage 4F. (Earlier interim
+      reading pre-restart: `VmRSS: 4406576 kB`, not part of the trend
+      comparison since it predates the clean baseline.)
 
 ## 6. Non-interference / regression
 
