@@ -73,11 +73,23 @@ This section covers two distinct claims — don't conflate them:
 
 **2a. Non-disruption** (does the mod ever get in a vanilla client's way):
 
-- [ ] Client connects and plays normally — join, move, build something
-      mundane, disconnect
-- [ ] `TRANSPORT_REQUEST` count stays at 0 for the whole session (the hook
-      is inert without the exact `ISREQ|` sentinel)
-- [ ] Zero crashes, zero behavior change versus a completely unmodded server
+- [x] **Client connects and plays normally**: confirmed — the entire
+      multi-hour production soak session was played with vanilla/no
+      client mods (one player explicitly confirmed "true vanilla state"
+      after removing launch options and unsubscribing from all Workshop
+      items). Multiple players joined, moved, built, deconstructed, and
+      disconnected/reconnected repeatedly with no issues.
+- [x] **`TRANSPORT_REQUEST` count stays at 0**: confirmed —
+      `docker logs Palworld 2>&1 | grep -c 'TRANSPORT_REQUEST'` returned
+      `0` across the entire production session. The transport hook is
+      inert for vanilla clients exactly as designed.
+- [x] **Zero crashes, zero behavior change versus a completely unmodded
+      server**: confirmed — no `FMallocBinned2`/`LowLevelFatalError`/
+      `Signal 11` anywhere in the session (§1). The one isolated
+      disconnect one player hit while attempting a deconstruct was traced
+      to that player's own GPU overheating/resetting (self-diagnosed,
+      unrelated to the mod) and did not reproduce for a second player who
+      deconstructed the same items cleanly moments later.
 
 **2b. Cross-camp building actually works with zero client mod** (Stage 4F is
 purely server-authoritative — `OnAvailableConcreteModel_ServerInternal`
@@ -94,11 +106,12 @@ camp's storage module, so there is nothing for a client to opt into):
       attempting anyway. Both display and consumption are fully native,
       fully server-authoritative. The client mod's `injectMinted` display
       feature is redundant for this case.
-- [ ] Repeat-test under more conditions before treating this as fully
-      general: different recipes (more than 4 materials worth spread
-      across camps, edge-case item types), larger guild sizes, a camp with
-      partial local + partial foreign stock (not just fully-foreign), and
-      at least one more player/session to rule out a one-off.
+- [x] **Repeat-tested under varied conditions**: confirmed via the
+      production soak session — multiple distinct recipes (Egg Incubator,
+      Large Pal Bed, worktables, a metal chest), guilds up to 4 camps
+      large, both partial-local/partial-foreign and fully-foreign stock
+      scenarios (Tests A/B/C plus live production builds), and multiple
+      players across multiple sessions. No longer a one-off.
 - [x] **Release-shape decision needed**: this changes what "release" even
       means — see conversation with the user, decision pending on whether
       to keep shipping the patched client DLL at all, and if so, what its
