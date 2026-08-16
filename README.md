@@ -1,4 +1,4 @@
-# Palworld Integrated Storage — Native Linux Dedicated-Server Port
+# Palworld Integrated Storage: Native Linux Dedicated-Server Port
 
 This repository is a native Linux dedicated-server port of
 [Sarfflow's Integrated Storage](https://github.com/Sarfflow/palworld-integrated-storage).
@@ -41,17 +41,17 @@ Windows builds are outside the current scope.
 
 See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for install steps, how it
 behaves for players, and known quirks. Short version: this is a
-**server-only** release — install `main.so` on the dedicated server and
-nothing on the client. Do not install any client-side Integrated Storage
-mod; it's unnecessary and the unpatched Steam Workshop/NexusMods build can
+**server-only** release. Install `main.so` on the dedicated server and
+nothing on the client. Don't install any client-side Integrated Storage
+mod, it's unnecessary and the unpatched Steam Workshop/NexusMods build can
 still crash clients on a large guild pool.
 
 ## Engineering record
 
 Linux port engineering documentation lives in two files:
 
-- [`docs/linux-port-status.md`](docs/linux-port-status.md) — current accepted checkpoint, safety boundaries, unresolved work, and a chronological stage-by-stage log.
-- [`docs/RELEASE_TEST_PLAN.md`](docs/RELEASE_TEST_PLAN.md) — the full release validation checklist and results.
+- [`docs/linux-port-status.md`](docs/linux-port-status.md): current accepted checkpoint, safety boundaries, unresolved work, and a chronological stage-by-stage log.
+- [`docs/RELEASE_TEST_PLAN.md`](docs/RELEASE_TEST_PLAN.md): the full release validation checklist and results.
 
 ## Attribution
 
