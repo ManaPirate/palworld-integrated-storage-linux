@@ -135,6 +135,19 @@ performs is re-derived fresh on every discovery pass while it's running.
   server always shows `0` for all of these outside a single-pass
   transient blip right when a chest is placed or removed, which
   self-heals on the very next pass.
+- **Running Palworld v1.0.3 and the server won't start, or crashes within
+  a few seconds of startup?** This is a known NullPrism-side issue on
+  v1.0.3 (recompiled `UGameEngine::Tick`), not specific to this mod — try
+  setting `EngineTickResolveMethod = VTable` under `[Hooks]` in
+  `UE4SS-settings.ini`. This isn't guaranteed to fix it for every server;
+  see `docs/linux-port-status.md` §9 for what's actually confirmed.
+- **Running Palworld v1.0.3 and the server stays up, logs look clean
+  (`FULL_PLAN_REGISTER SUMMARY` completing with `blocked=0
+  exceptions=0`), but guild-wide materials never show up at non-main
+  camps?** This is a known, currently unfixed v1.0.3 compatibility
+  problem — separate from the crash above — under active investigation.
+  It is not something wrong with your install. See
+  `docs/linux-port-status.md` §9 for the current state.
 
 ## Attribution
 

@@ -392,7 +392,54 @@ it enough to disassemble the FName decoder. No PalServer execution, no
 `FName::ToString()` execution, no accepted-source modification during this
 stage.
 
-## 9. Stage log
+## 9. Known issues (post-release)
+
+### Palworld v1.0.3 — two separate, confirmed problems, neither fixed yet
+
+Palworld updated `v1.0.2.100993` (what `v1.0.0` was built and tested
+against) to `v1.0.3.101283` on 2026-08-12. Two independent v1.0.3
+compatibility problems have since been confirmed, from two different real
+servers. Do not conflate them — they have different symptoms and only one
+has any mitigation:
+
+**1. NullPrism `HookEngineTick` can `SIGSEGV` on v1.0.3.** Root cause,
+confirmed upstream (`NullPrism/RE-UE4SS-Linux#38`): v1.0.3 recompiled
+`UGameEngine::Tick`, changing its prologue bytes; the installed trampoline
+crashes (`Signal 11`) ~2-3s after `Event loop start` when it fires on the
+now-different bytes. This mod depends on `RegisterEngineTickPreCallback`,
+which is backed by this exact hook.
+
+  Mitigation: `EngineTickResolveMethod = VTable` under `[Hooks]` in
+  `UE4SS-settings.ini` (default is `Scan`). One server in the upstream
+  thread ran stable for hours across six restarts with this set. **Not
+  universally sufficient** — the original reporter still crashed with
+  `VTable` set, at the vtable-resolved address instead of the scan
+  address, same timing. Upstream root cause for that divergence is still
+  open. If a v1.0.3 server won't start at all / crashes within seconds of
+  `Event loop start`, try this setting first; it is not guaranteed to fix
+  it.
+
+**2. Cross-registration silently no-ops on v1.0.3, without crashing, on at
+least one real server.** Reported on NexusMods (mod page comments,
+14 Aug 2026): server stays up, `FULL_PLAN_REGISTER SUMMARY` runs cleanly
+every ~8s (`blocked=0 exceptions=0`, all pairs `completed`), `REG_META
+RESULT=PASS` with the same reflected signature as v1.0.2
+(`parms=8 ... flags=0x18001000000280`) — but the build/craft menu at
+non-main camps only shows local materials; guild-wide totals never
+appear. This is **not** the `HookEngineTick` crash above — that reporter's
+`EngineTick` is clearly firing (hundreds of clean discovery passes logged)
+so their server isn't hitting problem 1 at all. `OnAvailableConcreteModel_
+ServerInternal` is being called, with what our own reflection-based
+validation confirms looks like the correct signature, and is having no
+effect. Root cause not yet found — needs live diagnostic instrumentation
+against an actual v1.0.3 server, not documentation archaeology. No
+mitigation known yet.
+
+**Open question**: whether problem 2 reproduces on every v1.0.3 server or
+only some (mirroring problem 1's non-universal behavior) — not yet
+confirmed either way on our own infrastructure as of this entry.
+
+## 10. Stage log
 
 Chronological, most recent first. One line per stage: what it did, what it
 proved, accept/reject. Full byte-for-byte historical detail for stages
