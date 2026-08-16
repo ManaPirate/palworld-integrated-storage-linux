@@ -14534,7 +14534,8 @@ namespace
 
             emit_marker(
                 "[ModIntegratedStorageCpp] "
-                "STAGE4A read-only discovery enabled"
+                "Discovery and cross-registration active "
+                "(mutating; see docs/linux-port-status.md Stage 4F)"
             );
 
             if (

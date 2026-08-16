@@ -245,8 +245,15 @@ Built:
 $(date --iso-8601=seconds)
 
 Scope:
-Stage 4d.2 performs read-only native class identity discovery on the game-returned backing UObject of GetItemChestContainerAccess.
-Stage 4d.1 established that the coherent non-chest backing UObject returned by GetItemChestContainerAccess matches none of the four predicted map-object model classes and exposes none of the twelve binary-derived lifecycle names. Stage 4d.2 retains the exact accepted chest/module/PalContainerId/GetContainer/membership/access-getter path. At build time, native Palworld UObject class names are derived from the live PalServer's own demangled UPal*/APal* vtable symbols and compiled into exact /Script/Pal.<Class> StaticFindObject lookups. Runtime compares only UClass pointers against the access-owner class and its direct native superclass. Numeric FName comparison indexes are recorded as fallback identity tokens; GetName, GetFullName, GetPathName and FName::ToString are not called. No lifecycle candidate lookup, lifecycle invocation, target-storage mutation, manager-map access, broad graph traversal, bulk PalItemContainer processing or production deployment is included.
+This field intentionally does not restate a snapshot of runtime capability
+-- that duplication is exactly what went stale before (a Stage 4d.2
+description survived unedited through Stage 4F, which performs real
+mutating ProcessEvent calls the old text explicitly said didn't happen).
+For the exact, current, stage-by-stage capability and safety-boundary
+record, see docs/linux-port-status.md (section 9, Stage log) at the
+Repository HEAD commit above -- that file is the one place this project
+keeps that description up to date; nothing here should be trusted instead
+of it.
 EOF
 
 echo
