@@ -433,7 +433,8 @@ ServerInternal` is being called, with what our own reflection-based
 validation confirms looks like the correct signature, and is having no
 effect. Root cause not yet found — needs live diagnostic instrumentation
 against an actual v1.0.3 server, not documentation archaeology. No
-mitigation known yet.
+mitigation known yet. Investigation plan:
+`docs/V1.0.3_DIAGNOSTIC_PLAN.md`.
 
 **Open question**: whether problem 2 reproduces on every v1.0.3 server or
 only some (mirroring problem 1's non-universal behavior) — not yet
