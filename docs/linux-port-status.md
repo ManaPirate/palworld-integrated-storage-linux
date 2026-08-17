@@ -419,26 +419,54 @@ which is backed by this exact hook.
   `Event loop start`, try this setting first; it is not guaranteed to fix
   it.
 
-**2. Cross-registration silently no-ops on v1.0.3, without crashing, on at
-least one real server.** Reported on NexusMods (mod page comments,
-14 Aug 2026): server stays up, `FULL_PLAN_REGISTER SUMMARY` runs cleanly
-every ~8s (`blocked=0 exceptions=0`, all pairs `completed`), `REG_META
-RESULT=PASS` with the same reflected signature as v1.0.2
-(`parms=8 ... flags=0x18001000000280`) — but the build/craft menu at
-non-main camps only shows local materials; guild-wide totals never
-appear. This is **not** the `HookEngineTick` crash above — that reporter's
-`EngineTick` is clearly firing (hundreds of clean discovery passes logged)
-so their server isn't hitting problem 1 at all. `OnAvailableConcreteModel_
+**2. Cross-registration silently no-ops on v1.0.3, without crashing.**
+Reported on NexusMods (mod page comments, 14 Aug 2026): server stays up,
+`FULL_PLAN_REGISTER SUMMARY` runs cleanly every ~8s (`blocked=0
+exceptions=0`, all pairs `completed`), `REG_META RESULT=PASS` with the
+same reflected signature as v1.0.2 (`parms=8 ...
+flags=0x18001000000280`), but the build/craft menu at non-main camps
+only shows local materials; guild-wide totals never appear. This is
+**not** the `HookEngineTick` crash above; that reporter's `EngineTick`
+is clearly firing (hundreds of clean discovery passes logged), so their
+server isn't hitting problem 1 at all. `OnAvailableConcreteModel_
 ServerInternal` is being called, with what our own reflection-based
 validation confirms looks like the correct signature, and is having no
-effect. Root cause not yet found — needs live diagnostic instrumentation
-against an actual v1.0.3 server, not documentation archaeology. No
-mitigation known yet. Investigation plan:
-`docs/V1.0.3_DIAGNOSTIC_PLAN.md`.
+effect.
 
-**Open question**: whether problem 2 reproduces on every v1.0.3 server or
-only some (mirroring problem 1's non-universal behavior) — not yet
-confirmed either way on our own infrastructure as of this entry.
+  **SELinux definitively ruled out (16 Aug 2026).** Two independent
+  findings from the same reporter close this off. First, on their
+  Fedora CoreOS server: `ls -Z` on `PalServer-Linux-Shipping` shows the
+  expected `container_file_t` (no stale label), and both `ausearch -m
+  avc -ts recent` and `journalctl -t setroubleshoot` came back empty, so
+  neither the stale file-context mechanism (`81502b6`) nor the
+  `execheap` mechanism (`RE-UE4SS-Linux#38`) is denying anything in this
+  neighborhood. Second, and conclusively: they deployed the mod
+  apples-to-apples (same Palworld build `24575149`, same `main.so`
+  `d82fb4d7a4...`, same cloned save) on an Unraid server with no SELinux
+  at all, and the no-op reproduced identically. This also rules out
+  NullPrism loader version as the variable, since their original report
+  was on `linux-v0.1.0` and this controlled test used `linux-v0.1.1`,
+  same result both times. Upgrading NullPrism will not fix this problem.
+
+  The controlled test also used this mod's own `SEMANTIC_OBSERVATION`
+  diagnostic (a Stage 4c.4j-era probe still compiled into the release
+  build, `main.cpp` around line 10984 onward; it fingerprints the
+  destination storage's own item slots, `ContainerId`/`ItemId`/
+  `StackCount`, at baseline/immediate/delayed samples around a
+  registration event) and got `RESULT=UNCHANGED` on both environments.
+  That is direct, storage-content-level confirmation that
+  `ProcessEvent(OnAvailableConcreteModel_ServerInternal)` is not
+  mutating state on v1.0.3, independent of the build-menu display and
+  independent of SELinux.
+
+  Root cause is therefore isolated to Palworld v1.0.3's own engine
+  behavior (or possibly the NullPrism loader's handling of it, though
+  loader version is now ruled out as the variable). Needs live
+  diagnostic instrumentation against an actual v1.0.3 server to go
+  further; see `docs/V1.0.3_DIAGNOSTIC_PLAN.md`, which the SELinux
+  finding above has substantially reprioritized (its Steps 1 and 3 are
+  now answered; the live-signature-diff and native-side-gating steps are
+  next). No mitigation known yet.
 
 ## 10. Stage log
 
