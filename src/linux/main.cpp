@@ -3684,6 +3684,8 @@ namespace
                     function->GetParmsSize()
                 );
 
+            std::size_t parameter_index{};
+
             for (
                 auto* property :
                     function->ForEachProperty()
@@ -3719,6 +3721,84 @@ namespace
                             object_property;
                     }
                 }
+
+                // Positional dump, not name-keyed: FName::ToString()
+                // on arbitrary reflected data is the hazard documented
+                // near resolve_transport_item_name() above, and this
+                // probe has no need to take that risk to answer the
+                // Step 4 signature-drift question (see
+                // docs/V1.0.3_DIAGNOSTIC_PLAN.md).
+                const char* parameter_kind = "other";
+
+                if (object_property != nullptr)
+                {
+                    parameter_kind = "object";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FArrayProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "array";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FSetProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "set";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FMapProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "map";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FStructProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "struct";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FNumericProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "numeric";
+                }
+                else if (
+                    RC::Unreal::CastField<
+                        RC::Unreal::FBoolProperty
+                    >(property) != nullptr
+                )
+                {
+                    parameter_kind = "bool";
+                }
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "REG_META_PARAM run=%llu index=%zu "
+                    "kind=%s offset=%d size=%d "
+                    "element_size=%d",
+                    static_cast<unsigned long long>(
+                        run
+                    ),
+                    parameter_index,
+                    parameter_kind,
+                    property->GetOffset_Internal(),
+                    property->GetSize(),
+                    property->GetElementSize()
+                );
+
+                ++parameter_index;
             }
         }
 
