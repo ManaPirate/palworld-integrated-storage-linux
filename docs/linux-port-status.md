@@ -394,13 +394,13 @@ stage.
 
 ## 9. Known issues (post-release)
 
-### Palworld v1.0.3 — two separate, confirmed problems, neither fixed yet
+### Palworld v1.0.3 — three separate problems, none fixed yet
 
 Palworld updated `v1.0.2.100993` (what `v1.0.0` was built and tested
-against) to `v1.0.3.101283` on 2026-08-12. Two independent v1.0.3
-compatibility problems have since been confirmed, from two different real
-servers. Do not conflate them — they have different symptoms and only one
-has any mitigation:
+against) to `v1.0.3.101283` on 2026-08-12. Three independent v1.0.3
+compatibility problems have since been reported, from three different
+real servers. Do not conflate them — they have different symptoms and
+only one has any mitigation:
 
 **1. NullPrism `HookEngineTick` can `SIGSEGV` on v1.0.3.** Root cause,
 confirmed upstream (`NullPrism/RE-UE4SS-Linux#38`): v1.0.3 recompiled
@@ -467,6 +467,36 @@ effect.
   finding above has substantially reprioritized (its Steps 1 and 3 are
   now answered; the live-signature-diff and native-side-gating steps are
   next). No mitigation known yet.
+
+**3. Reported: active interference with unrelated systems on v1.0.3
+(17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
+this isn't the mod failing to do something, it's the mod (or the
+currently-active Stage 4F mutating hook, unconfirmed) possibly causing
+side effects on game systems that have nothing to do with guild storage.
+Reported symptoms so far, kept as a running list rather than folded
+together since each may have a different mechanism or no mechanism in
+this mod at all:
+
+  - Egg incubation timers pausing. Also mentioned separately in NexusMods
+    mod page comments around the same date.
+  - Building placement getting stuck to whatever footprint existed when
+    the base was first built (reporter's example: a water base with four
+    foundation planks and a palbox, unable to place further foundations
+    past that footprint), reportedly reproducing even when the required
+    materials are in the player's own inventory rather than pulled from
+    guild storage. That detail matters: if it reproduces off personal
+    inventory, guild-wide material pooling (this mod's actual job) isn't
+    the mechanism, which points at the mutating hook doing something
+    broader than intended rather than at the storage-registration path
+    specifically.
+
+  Single informant, no server logs collected, not yet reproduced on our
+  own infrastructure or corroborated by a second detailed report the way
+  problems 1 and 2 were. Mod has been disabled on the reporter's server
+  as a precaution. Treat as a lead, not a confirmed finding, until there's
+  a second independent report or our own reproduction. No investigation
+  started yet; not covered by `docs/V1.0.3_DIAGNOSTIC_PLAN.md`, which is
+  scoped to problem 2 only.
 
 ## 10. Stage log
 
