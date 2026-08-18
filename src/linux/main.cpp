@@ -671,6 +671,100 @@ namespace
         return true;
     }
 
+    // Same decode as parse_transport_request_guid, without the wire
+    // sentinel prefix -- used to read a plain 32-hex-char GuildKey out
+    // of a small operator-edited text file (Step 5 semantic-observation
+    // target selection, docs/V1.0.3_DIAGNOSTIC_PLAN.md).
+    auto parse_hex_guid_plain(
+        const std::string& text,
+        GuildKey& output
+    ) noexcept -> bool
+    {
+        if (text.size() != TransportGuidHexLength)
+        {
+            return false;
+        }
+
+        const auto hex_value = [](char c) noexcept -> int
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+
+        for (
+            std::size_t index = 0;
+            index < output.size();
+            ++index
+        )
+        {
+            const auto high =
+                hex_value(text[index * 2]);
+
+            const auto low =
+                hex_value(text[index * 2 + 1]);
+
+            if (high < 0 || low < 0)
+            {
+                return false;
+            }
+
+            output[index] =
+                static_cast<std::uint8_t>(
+                    (high << 4) | low
+                );
+        }
+
+        return true;
+    }
+
+    // Compile-time only, deliberately not runtime-file-configurable --
+    // an earlier std::ifstream-based version of this (reading a small
+    // text file under Mods/ModIntegratedStorageCpp/ once per discovery
+    // pass) caused a reproducible FMallocBinned2 allocator-corruption
+    // crash the moment the file was actually opened and read, even when
+    // its content failed to parse. Isolated empirically (see
+    // docs/linux-port-status.md §6): no file present ran clean every
+    // time; a file present crashed every time regardless of guild
+    // targeted or whether parsing succeeded. Root mechanism unconfirmed
+    // -- checked the obvious theory (libUE4SS.so exporting
+    // malloc/operator new and intercepting main.so's own heap calls)
+    // against the real symbol table with nm -D and it's disproven, no
+    // such exports exist -- but the correlation with the file I/O
+    // itself was exact and reproducible, so this is a one-build-per-
+    // variant constant instead. Empty string = default behavior (first
+    // eligible guild in sorted order), identical to every restart
+    // before Step 5 work started. Set to a 32-hex-char GuildKey (see
+    // guid_to_hex's output format in this file's own GUILD/CHEST_GUILD
+    // log lines) to target a specific guild for one build, matching
+    // Step 5's controlled variant testing
+    // (docs/V1.0.3_DIAGNOSTIC_PLAN.md).
+    constexpr char SemanticObservationTargetGuildHex[] =
+        "";
+
+    struct SemanticObservationTarget
+    {
+        bool has_guild{};
+        GuildKey guild{};
+        bool has_camp{};
+        GuildKey camp{};
+    };
+
+    auto resolve_semantic_observation_target()
+        -> SemanticObservationTarget
+    {
+        SemanticObservationTarget target{};
+
+        target.has_guild =
+            parse_hex_guid_plain(
+                SemanticObservationTargetGuildHex,
+                target.guild
+            );
+
+        return target;
+    }
+
     // Reads an incoming FString's raw TArray<TCHAR> as plain ASCII. Pure
     // read of memory the engine already owns (same class of access as
     // every other reflected property read in this file) — no Unreal
@@ -2846,6 +2940,9 @@ namespace
                 camp_id_ok ? 1 : 0
             );
 
+            const auto semantic_target =
+                resolve_semantic_observation_target();
+
             std::vector<GuildKey> guild_order{};
             guild_order.reserve(
                 registration_plan.size()
@@ -2881,8 +2978,21 @@ namespace
 
             GuildKey selected_requester_id{};
 
+            bool selected_requester_is_target_camp{};
+
             for (const auto& guild_key : guild_order)
             {
+                if (
+                    semantic_target.has_guild &&
+                    !(
+                        guild_key ==
+                            semantic_target.guild
+                    )
+                )
+                {
+                    continue;
+                }
+
                 const auto iterator =
                     registration_plan.find(
                         guild_key
@@ -3012,6 +3122,39 @@ namespace
                 auto* candidate_requester =
                     ordered_camps.front().second;
 
+                auto candidate_requester_id =
+                    ordered_camps.front().first;
+
+                bool candidate_is_target_camp{};
+
+                if (semantic_target.has_camp)
+                {
+                    for (
+                        const auto& [
+                            camp_id,
+                            camp
+                        ] : ordered_camps
+                    )
+                    {
+                        if (
+                            camp_id ==
+                                semantic_target.camp
+                        )
+                        {
+                            candidate_requester =
+                                camp;
+
+                            candidate_requester_id =
+                                camp_id;
+
+                            candidate_is_target_camp =
+                                true;
+
+                            break;
+                        }
+                    }
+                }
+
                 std::size_t candidate_foreign_chests{};
 
                 for (
@@ -3050,9 +3193,33 @@ namespace
                     candidate_requester;
 
                 selected_requester_id =
-                    ordered_camps.front().first;
+                    candidate_requester_id;
+
+                selected_requester_is_target_camp =
+                    candidate_is_target_camp;
 
                 break;
+            }
+
+            if (
+                semantic_target.has_guild ||
+                semantic_target.has_camp
+            )
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "SEMANTIC_TARGET "
+                    "guild_configured=%d "
+                    "camp_configured=%d "
+                    "guild_selected=%d "
+                    "camp_matched=%d",
+                    semantic_target.has_guild ? 1 : 0,
+                    semantic_target.has_camp ? 1 : 0,
+                    !guid_is_zero(selected_guild) ?
+                        1 : 0,
+                    selected_requester_is_target_camp ?
+                        1 : 0
+                );
             }
 
             static auto* managers =
