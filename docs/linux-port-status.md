@@ -283,6 +283,21 @@ numeric suffix, not just the base name.
 7. `OnReadyItemContainerGuildChest`, `OnUpdateItemContainerModule`, `OnUpdateItemContainer` transition paths — all negative.
 8. Stage 4d.0 lifecycle exact-name probes — zero matches.
 9. GuildChestModel module route — controlled negative.
+10. `std::ifstream`/file-based runtime config reads from the
+    discovery/tick thread — allocator corruption
+    (`FMallocBinned2 ... canary`, `Signal 11`), confirmed empirically and
+    reproducibly (Step 5 target-selector work, §9 problem 2). Isolated
+    before assuming cause: no file present ran clean every time; a file
+    present crashed every time regardless of which guild was targeted or
+    whether its content even parsed successfully. Root mechanism not
+    confirmed — checked the obvious theory (`libUE4SS.so` exporting
+    `malloc`/`operator new` and intercepting `main.so`'s own heap calls
+    via symbol interposition) directly against the real symbol table
+    with `nm -D`; disproven, no such exports exist. Use a compile-time
+    constant instead (`SemanticObservationTargetGuildHex` in
+    `main.cpp`), which reuses only patterns already proven safe
+    elsewhere in this file and needs one build per variant rather than a
+    runtime-editable file.
 
 The accepted transport pool must keep using bounded planner-selected chest
 lookups only (§3), never broad enumeration.
@@ -468,6 +483,35 @@ effect.
   now answered; the live-signature-diff and native-side-gating steps are
   next). No mitigation known yet.
 
+  **Step 4 closed, 19 Aug 2026: the `parms=8` field was always a byte
+  size, not a parameter count.** `REG_META_PARAM` (added Stage-Step-4,
+  one log line per input parameter) was finally captured against a real
+  v1.0.3 server this session — this project's own production/test
+  infrastructure turned out to already be running `w00z001`'s exact
+  reproducing `main.so` hash (`d82fb4d7a4...`) on the same Palworld
+  build (`24575149`), so no separate environment was needed. Result:
+  exactly **one** parameter (`index=0 kind=object offset=0 size=8
+  element_size=8`), and that single 8-byte object parameter exactly
+  fills the entire `parms=8` block — confirmed against the real SDK
+  header (`UFunction::GetParmsSize()` is used as
+  `_malloca(ParamStructSize)` in `BPMacros.hpp`, i.e. a byte-size
+  allocation call, not a parameter count). The "other seven parameter
+  bytes" framing this section used to carry was a misread of that
+  field, not evidence of an unchecked signature gap. The current v1.0.3
+  signature is fully characterized, not partially. Closed without a
+  v1.0.2 baseline capture (judged unnecessary given this finding).
+
+  **Step 5, guild-size bullet answered, 19 Aug 2026: no.** Added a
+  compile-time target selector (`SemanticObservationTargetGuildHex` in
+  `main.cpp`, see §6 item 10 for why it's compile-time rather than a
+  runtime file) so the one-shot `SEMANTIC_OBSERVATION` probe can be
+  pointed at a specific guild instead of always the first eligible one.
+  Tested the largest eligible guild in the test server's real data
+  (4 camps, 31 chests) and the smallest (2 camps) — both
+  `RESULT=UNCHANGED`, same no-op. Guild size is not the gating factor.
+  Camp distance, storage class, and module remove/re-add (the other
+  three Step 5 bullets) are still untested.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -507,6 +551,8 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Step 5 guild-size variant | **Accepted diagnostic.** Added `SemanticObservationTargetGuildHex`, a compile-time constant letting `SEMANTIC_OBSERVATION` target a specific guild instead of always the first eligible one in sorted order. Built and tested against the test server's largest (4 camps, 31 chests) and smallest (2 camps) eligible guilds: both `RESULT=UNCHANGED`. Guild size ruled out as the gating factor for problem 2. Getting there took a detour: a `std::ifstream`-based runtime file version of the same idea caused a reproducible `FMallocBinned2` allocator-corruption crash the moment the file was opened, independent of guild targeted or parse success — isolated properly, reverted, and rebuilt on the compile-time approach instead (§6 item 10). |
+| Step 4 signature check | **Resolved, corrected an earlier misread.** Captured `REG_META_PARAM` against a real v1.0.3 server for the first time (this project's own test/production infra turned out to already run the exact `main.so` hash `w00z001` used in their reproduction). Result: one 8-byte object parameter that exactly fills the `parms=8` block. Confirmed against the real SDK header that `GetParmsSize()` returns a byte size, not a parameter count — the "other seven parameter bytes" framing this doc previously carried was wrong. Current v1.0.3 signature is now fully characterized. Closed without a v1.0.2 baseline capture. |
 | Release v1.0.0 | **Shipped, server-only.** Fast-forwarded `claude/palworld-linux-storage-mod-gx9n5d` (containing every accepted stage through 4F plus the full release validation) directly onto `main` — a strict ancestor relationship, so no merge conflicts. Full release validation (`docs/RELEASE_TEST_PLAN.md`) ran across the isolated NullPrism test server and then a multi-hour real production deploy (7-8 concurrent guilds, ~20 camps, multiple players): clean startup markers, `blocked=0 exceptions=0` sustained for hours, zero `FMallocBinned2`/crash markers, guild isolation confirmed (including an actual leave-guild/new-guild test), cross-camp consumption confirmed exact (verified material counts at the true source, not just the destination), a full production container restart mid-session recovered cleanly, and `VmRSS` growth over a 2-hour window was ~3.6 MB — negligible, consistent with the already-accepted Stage 4D.9f leak-and-cache curve. One isolated client disconnect during a deconstruct attempt was investigated and traced to the affected player's own GPU instability (self-diagnosed, not reproduced by a second player performing the identical action), not a mod defect. Release ships `main.so` only — see §8 for the scope decision and `docs/USER_GUIDE.md` for the install guide and known-behavior notes (rejoin-while-inside-camp refresh quirk, rare stuck-camp state) carried forward from `RELEASE_TEST_PLAN.md` §8. |
 | 4F | **Accepted, verified in-game.** Root-caused and fixed a real user report ("Insufficient build materials" on a Large Pal Bed at a non-main camp, despite the build checklist showing far more than needed). Two false starts before the real fix, both reverted cleanly (`bdf5712`, `7f49271`, `317ec88`) rather than left in place: first hooked `PalBuilderComponent:OnEnterBaseCamp`/`OnExitBaseCamp`/`IsExistsMaterialForBuildObject` to track camps and intercept material checks, then added a diagnostic probe on `PalNetworkPlayerComponent:RequestBuild_ToServer` when the first attempt showed zero hook fires across a real test session — proving those `PalBuilderComponent` functions are client-predicted only and never execute on a dedicated server at all, which no amount of correct offset math could have fixed. Checking the upstream Windows mod's own `dllmain.cpp` (`srvDiscoverReconcile()`) showed the real, working mechanism: periodically call `OnAvailableConcreteModel_ServerInternal` directly on each camp's storage module for every foreign same-guild chest's concrete model, so the *native* game code treats it as one of that camp's own registered containers — no build/craft function hooked or faked at all. This repo already had that exact executor (`run_controlled_full_plan_registration`, calling the identical `OnAvailableConcreteModel_ServerInternal`, with careful per-pair guild/camp/class/function validation), built and wired into the live discovery tick back in Stage 4d.7a — but gated behind a `.stage4d7a-arm` file that had never been created, and further limited to firing exactly once per process lifetime even when armed (`g_full_plan_registration_attempted`, a `compare_exchange_strong` latch). Armed it manually first to validate: `FULL_PLAN_REGISTER SUMMARY planned=285 attempted=285 completed=285 blocked=0 exceptions=0` → `RESULT=PASS`, and the reported build immediately started working, with the tester also noting materially reduced server lag. Promoted to permanent production behavior: removed the arm-file gate (`stage4d7a_arm_file_present()` deleted) and the one-shot latch, so the executor now runs unconditionally on every discovery pass (~8s) against the freshly-rebuilt `planned_execution_pairs` for that pass — matching the upstream mod's own reconcile cadence exactly, and closing the previously-open "one-shot misses camps created after startup" gap (§8 item 5, prior entries) as a side effect. Re-registering an already-registered pair was already proven idempotent by the upstream mod calling it unconditionally every pass with no de-duplication. |
 | 4E.4 | Two results. (1) **Accepted, verified.** Rebuilt/redeployed the Stage 4E.3 server fix and retested against a real client running the actual upstream Windows mod (Steam Workshop). Three clean round trips over a ~5 minute, 37-discovery-cycle window, including a disconnect/reconnect: `TRANSPORT_REQUEST queued=1` -> `TRANSPORT_REQUEST RESULT=SENT items=272 len=5664`, zero crashes; tester confirmed cross-camp materials visible and usable in-game. First complete end-to-end validation of the whole Stage 4E transport feature. (2) **New bug found and fixed, not yet build/runtime-verified.** Immediately after those three successful round trips, the client crashed: `LowLevelFatalError [File:...MallocBinned2.cpp] [Line: 1430] FMallocBinned2 Attempt to realloc an unrecognized block ... canary == 0x0 != 0xe3`. Diagnosed via direct binary parsing of the client's `UEMinidump.dmp` (had to fix an offset bug in the ad-hoc parser's `MINIDUMP_MODULE.ModuleNameRva` field first — was reading `TimeDateStamp` instead) plus UTF-16 string extraction, which recovered the exact UE fatal-error text; correlated against `UE4SS.log` timestamps (crash landed right after a 4th `CH request sent`, moments after 7 `injectMinted` calls fired in one frame at an earlier menu-open). Root cause, in the client mod's own `src/dllmain.cpp` (not this repo's Linux server code): `injectMinted()` transiently points a real `UPalItemContainer`'s `ItemSlotArray.data` at a `std::vector<UObject*>` buffer (CRT heap) so a native material-availability scan can read the guild pool's minted slots; at scale (272 minted + 230 real slots, several scans back to back) that closed-source native scan evidently reallocated/freed the array it was handed, and since the buffer was never actually allocated by the game's `FMallocBinned2`, the free/realloc bookkeeping had no canary for it — same crash class as Stage 4E.3's `FindAllOf` bug (foreign-allocator memory handed to code that assumes it owns the allocator), different mechanism (pointer-aliasing into a live TArray vs. destroying a cross-DSO vector). Fixed by switching `injectMinted`/`restoreMinted` to allocate/free the swap buffer via `RC::Unreal::FMemory::Malloc`/`Free` (confirmed as the real public SDK API by reading UE4SS's own internal source, which uses it identically) instead of the CRT heap, so any native realloc/free against it is now valid. Needs a Windows build + retest before shipping (§8 item 1). |
