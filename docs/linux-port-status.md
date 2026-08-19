@@ -567,6 +567,36 @@ effect.
   reflection-inspectable (signature, guild size, distance, function
   flags).
 
+  **Confirmed `ProcessEvent` dispatch itself is intact, 19 Aug 2026.**
+  Two more real public `UFunction` methods, same class of confirmed-safe
+  call as `GetFunctionFlags()`: `GetReturnProperty()` (does the function
+  have a return value) and `GetFuncPtr()` (the bound native function
+  pointer — `UObject::ProcessInternal` for Blueprint/script functions,
+  the real native address otherwise). Never called or dereferenced the
+  pointer, only logged its address. Resolved which binary it falls
+  inside by reading `/proc/self/maps` with plain
+  `std::fopen`/`fgets`/`fclose` (mirroring the existing,
+  production-proven `read_process_rss_kb()` pattern), deliberately not
+  `std::ifstream` given the earlier crash finding (§6 item 10). Result:
+  `has_return_value=0` (confirms this is a genuine `void` function),
+  `func_ptr` resolves cleanly into `/PalServer-Linux-Shipping` itself —
+  not the Blueprint VM dispatcher, not null, not somewhere unexpected.
+  This is the run's one confirmatory positive, not another negative:
+  the whole reflection-visible call chain (resolve function →
+  `ProcessEvent` → dispatch to native pointer) is completely intact and
+  correct on v1.0.3. Whatever causes the no-op is inside that native
+  function's own compiled logic, past what reflection can see.
+
+  Five checks this session, all clean or negative for a
+  topological/metadata explanation (signature, guild size, distance,
+  function flags, dispatch correctness). Going further means either
+  disassembling the native function at that address (real
+  reverse-engineering of Palworld's own binary — distinct from what
+  CLAUDE.md prohibits about RE-UE4SS, but a materially bigger and
+  riskier undertaking) or getting an actual v1.0.2 binary via SteamCMD
+  depot downgrade to diff addresses/behavior directly. Neither attempted
+  yet — a real scope decision, not something to default into.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -606,6 +636,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| ProcessEvent dispatch check | **Accepted diagnostic, closes off the reflection-visible avenue.** Added `REG_META_FUNC` using two more real public `UFunction` methods (`GetReturnProperty()`, `GetFuncPtr()`) plus a `/proc/self/maps` module-resolution helper (plain `fopen`/`fgets`/`fclose`, not `std::ifstream`, per §6 item 10). Result: `has_return_value=0` (confirms a genuine `void` function), `func_ptr` resolves cleanly into `/PalServer-Linux-Shipping` — real native dispatch, not the Blueprint VM, not null. Confirms the whole reflection-visible call chain is intact on v1.0.3; whatever causes the no-op is inside the native function's own compiled logic. Fifth check this session, all clean/negative for a metadata-level explanation. Zero crashes. |
 | FunctionFlags capture | **Accepted diagnostic.** Confirmed `UFunction::GetFunctionFlags()` is a real public, non-version-gated wrapper around the private `GetFunctionFlagsBase()`/`GetFunctionFlags417()` accessors (read directly from `Class.hpp` and the generated member-layout header, not assumed) — the exact gap that deferred this at Step 4 time. Added `REG_META_FUNCTION_FLAGS`, captured `flags=0x40401` on live v1.0.3, decoded against the real `EFunctionFlags` enum: `FUNC_Final \| FUNC_Native \| FUNC_Private`. Mundane, nothing gating-looking, no v1.0.2 value to diff against. Fourth consecutive negative-but-verified result this session. |
 | Step 5 distance + storage-class | **Accepted diagnostic, closes two more Step 5 bullets.** Storage-class ruled not-applicable directly from the code (`get_storage_module_class()` is the only class the discovery pipeline ever accepts). Distance required finding real camp coordinates: added `CAMP_PROPERTY_DUMP` (positional/kind dump of a camp's own properties, `REG_META_PARAM`'s pattern applied to a `UObject` instead of a `UFunction`), extended to recurse one level into object-reference properties and identify a genuine `/Script/CoreUObject.Vector` struct by real struct-identity comparison. Found it 24 bytes in (double-precision LWC, not the 12-byte single-float layout an initial guess assumed — that misread produced garbage floats until corrected). Real coordinates confirmed an ~8x distance spread between a small and large guild's camp pairs (≈15,645 vs ≈128,535 units), both `RESULT=UNCHANGED`. Distance ruled out as the gating factor. Zero crashes across the whole sequence. |
 | Step 5 guild-size variant | **Accepted diagnostic.** Added `SemanticObservationTargetGuildHex`, a compile-time constant letting `SEMANTIC_OBSERVATION` target a specific guild instead of always the first eligible one in sorted order. Built and tested against the test server's largest (4 camps, 31 chests) and smallest (2 camps) eligible guilds: both `RESULT=UNCHANGED`. Guild size ruled out as the gating factor for problem 2. Getting there took a detour: a `std::ifstream`-based runtime file version of the same idea caused a reproducible `FMallocBinned2` allocator-corruption crash the moment the file was opened, independent of guild targeted or parse success — isolated properly, reverted, and rebuilt on the compile-time approach instead (§6 item 10). |
