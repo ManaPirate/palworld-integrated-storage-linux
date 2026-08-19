@@ -765,6 +765,287 @@ namespace
         return target;
     }
 
+    auto known_vector_struct()
+        -> RC::Unreal::UScriptStruct*
+    {
+        static auto* result =
+            RC::Unreal::UObjectGlobals::
+                StaticFindObject<
+                    RC::Unreal::UScriptStruct*
+                >(
+                    nullptr,
+                    nullptr,
+                    STR(
+                        "/Script/CoreUObject.Vector"
+                    )
+                );
+
+        return result;
+    }
+
+    // Step 5 distance testing (docs/V1.0.3_DIAGNOSTIC_PLAN.md), phase
+    // A: positional/kind dump of a camp's own properties, the same
+    // established pattern as REG_META_PARAM (Step 4), applied to a
+    // different UStruct-derived object instead of a UFunction's
+    // parameters. Never resolves a property name via
+    // FName::ToString() -- kind + offset + size, plus a struct-identity
+    // check against a known UScriptStruct for the vector case, is
+    // enough to find a location-shaped field without that hazard.
+    // Deliberately read-only and only emitted when a target guild is
+    // configured (see SemanticObservationTargetGuildHex above), so
+    // default behavior and log volume are unaffected.
+    auto emit_camp_property_dump(
+        const char* role,
+        const GuildKey& guild,
+        RC::Unreal::UObject* camp,
+        int depth = 0
+    ) -> void
+    {
+        if (camp == nullptr || depth > 1)
+        {
+            return;
+        }
+
+        auto* camp_class =
+            camp->GetClassPrivate();
+
+        if (camp_class == nullptr)
+        {
+            return;
+        }
+
+        std::size_t index{};
+
+        for (
+            auto* property :
+                camp_class->ForEachProperty()
+        )
+        {
+            if (property == nullptr)
+            {
+                continue;
+            }
+
+            const char* kind = "other";
+            bool is_vector{};
+
+            auto* struct_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FStructProperty
+                >(property);
+
+            auto* object_property =
+                RC::Unreal::CastField<
+                    RC::Unreal::FObjectProperty
+                >(property);
+
+            if (object_property != nullptr)
+            {
+                kind = "object";
+            }
+            else if (
+                RC::Unreal::CastField<
+                    RC::Unreal::FArrayProperty
+                >(property) != nullptr
+            )
+            {
+                kind = "array";
+            }
+            else if (
+                RC::Unreal::CastField<
+                    RC::Unreal::FSetProperty
+                >(property) != nullptr
+            )
+            {
+                kind = "set";
+            }
+            else if (
+                RC::Unreal::CastField<
+                    RC::Unreal::FMapProperty
+                >(property) != nullptr
+            )
+            {
+                kind = "map";
+            }
+            else if (struct_property != nullptr)
+            {
+                kind = "struct";
+
+                is_vector =
+                    known_vector_struct() !=
+                        nullptr &&
+                    struct_property->
+                        GetStruct().Get() ==
+                        known_vector_struct();
+            }
+            else if (
+                RC::Unreal::CastField<
+                    RC::Unreal::FNumericProperty
+                >(property) != nullptr
+            )
+            {
+                kind = "numeric";
+            }
+            else if (
+                RC::Unreal::CastField<
+                    RC::Unreal::FBoolProperty
+                >(property) != nullptr
+            )
+            {
+                kind = "bool";
+            }
+
+            // Raw float dump for struct-kind properties only, same
+            // class of read as SEMANTIC_OBSERVATION's existing raw
+            // container/item/stack byte reads above -- pure memory the
+            // engine already owns, no object constructed or destructed.
+            // Lets a location-shaped field be spotted by eye (plausible
+            // world-coordinate magnitudes) without needing to already
+            // know its exact FStruct identity or name.
+            char floats_buffer[160] = "";
+
+            if (struct_property != nullptr)
+            {
+                auto* raw =
+                    struct_property->
+                        ContainerPtrToValuePtr<
+                            void
+                        >(camp);
+
+                if (raw != nullptr && is_vector)
+                {
+                    // Confirmed /Script/CoreUObject.Vector by struct
+                    // identity, not guessed -- this engine build uses
+                    // double-precision (Large World Coordinates,
+                    // 24 bytes = 3 doubles), not the older 12-byte
+                    // single-float layout, hence doubles here and
+                    // floats in the generic branch below.
+                    const auto* as_doubles =
+                        reinterpret_cast<
+                            const double*
+                        >(raw);
+
+                    std::snprintf(
+                        floats_buffer,
+                        sizeof(floats_buffer),
+                        "%.2f,%.2f,%.2f",
+                        as_doubles[0],
+                        as_doubles[1],
+                        as_doubles[2]
+                    );
+                }
+                else if (raw != nullptr)
+                {
+                    const auto* as_floats =
+                        reinterpret_cast<
+                            const float*
+                        >(raw);
+
+                    const auto float_count =
+                        std::min<std::size_t>(
+                            static_cast<std::size_t>(
+                                property->GetSize()
+                            ) / 4,
+                            8
+                        );
+
+                    std::size_t written{};
+
+                    for (
+                        std::size_t float_index{};
+                        float_index < float_count;
+                        ++float_index
+                    )
+                    {
+                        written +=
+                            static_cast<std::size_t>(
+                                std::snprintf(
+                                    floats_buffer +
+                                        written,
+                                    sizeof(
+                                        floats_buffer
+                                    ) - written,
+                                    "%s%.2f",
+                                    float_index == 0 ?
+                                        "" : ",",
+                                    static_cast<
+                                        double
+                                    >(
+                                        as_floats[
+                                            float_index
+                                        ]
+                                    )
+                                )
+                            );
+                    }
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "CAMP_PROPERTY_DUMP role=%s guild=%s "
+                "index=%zu kind=%s offset=%d size=%d "
+                "element_size=%d is_vector=%d floats=%s",
+                role,
+                guid_to_hex(guild).data(),
+                index,
+                kind,
+                property->GetOffset_Internal(),
+                property->GetSize(),
+                property->GetElementSize(),
+                is_vector ? 1 : 0,
+                floats_buffer
+            );
+
+            // One hop only (depth guard above): dereference each
+            // top-level object reference and dump its properties too,
+            // in case the camp model itself doesn't hold world location
+            // directly and instead references an actor that does. Raw
+            // pointer read out of the property's own value slot, the
+            // same class of access as every other reflected property
+            // read in this file -- no FName resolution, no destructor
+            // risk.
+            if (depth == 0 && object_property != nullptr)
+            {
+                auto* slot =
+                    property->
+                        ContainerPtrToValuePtr<
+                            void
+                        >(camp);
+
+                if (slot != nullptr)
+                {
+                    auto* referenced =
+                        *reinterpret_cast<
+                            RC::Unreal::UObject**
+                        >(slot);
+
+                    if (referenced != nullptr)
+                    {
+                        char nested_role[64]{};
+
+                        std::snprintf(
+                            nested_role,
+                            sizeof(nested_role),
+                            "%s.ref%zu",
+                            role,
+                            index
+                        );
+
+                        emit_camp_property_dump(
+                            nested_role,
+                            guild,
+                            referenced,
+                            depth + 1
+                        );
+                    }
+                }
+            }
+
+            ++index;
+        }
+    }
+
     // Reads an incoming FString's raw TArray<TCHAR> as plain ASCII. Pure
     // read of memory the engine already owns (same class of access as
     // every other reflected property read in this file) — no Unreal
@@ -3181,6 +3462,21 @@ namespace
                 if (candidate_foreign_chests == 0)
                 {
                     continue;
+                }
+
+                if (semantic_target.has_guild)
+                {
+                    emit_camp_property_dump(
+                        "camp_a",
+                        guild_key,
+                        ordered_camps[0].second
+                    );
+
+                    emit_camp_property_dump(
+                        "camp_b",
+                        guild_key,
+                        ordered_camps[1].second
+                    );
                 }
 
                 selected_guild_plan =
