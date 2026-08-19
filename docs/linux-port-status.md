@@ -632,10 +632,37 @@ effect.
   named **`ContainerInfos`**, on the same class as
   `GuildContainerInfo` and a delegate, `OnUpdateAnyItemContainerDelegate`
   — the delegate is worth keeping in mind as its own plausible
-  "write happens, nothing downstream reacts" mechanism. Not yet done:
-  capturing `ContainerInfos`' actual contents after a real registration
-  pass, or finding what else reads it. Full method in
-  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7.
+  "write happens, nothing downstream reacts" mechanism.
+
+  **Tried finding the reader by vtable, hit a real tooling wall.**
+  Read the raw vtable pointer off the storage module instance and its
+  entries (same class of raw read as everything else, no calls made
+  through any entry), captured 101 entries, correctly self-terminated
+  at the real boundary. Narrowed to ~19 same-neighbourhood candidates,
+  scanned each for offset `0x50`/`0x58`/`0x5c` references: four hits,
+  all dead ends — one was the class's own destructor (frees
+  `ContainerInfos` on teardown, not a content reader), the rest
+  coincidental. Real limitation: `objdump` has no cross-reference
+  database, can't answer "what reads this offset anywhere in the
+  binary" — the actual consumer is plausibly a method on some other
+  class entirely. Would need a proper decompiler (Ghidra/IDA) to find
+  for real; not attempted.
+
+  **Decisive instead: captured `ContainerInfos`' actual live contents
+  after real registration passes.** Gated to fire on `run>=3` (at
+  least two full registration passes already completed against that
+  instance, confirmed from the actual call order). Result:
+  `count=23`, all 10 sampled entries have real, distinct, non-zero
+  GUIDs. **This conclusively proves the write path works correctly on
+  v1.0.3** — `OnAvailableConcreteModel_ServerInternal` is doing
+  exactly what it's supposed to. Combined with `SEMANTIC_OBSERVATION`
+  already proving the destination storage's own item-slot memory
+  never changes, the bug is now pinned down as definitively downstream
+  of this function. `OnUpdateAnyItemContainerDelegate` is the
+  strongest concrete lead: if it's meant to fire on container-list
+  change and isn't bound or firing on v1.0.3, that exactly explains
+  the whole symptom. Not yet checked. Full method in
+  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §§8-9.
 
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
@@ -676,6 +703,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| ContainerInfos live-contents capture | **Decisive result: the write path is proven correct.** Read `ContainerInfos`' real `Count`/`Max`/`Data` fields directly, gated on `run>=3` so at least two full registration passes had already run against the exact instance observed. Result: `count=23`, all 10 sampled entries real, distinct, non-zero GUIDs. Confirms `OnAvailableConcreteModel_ServerInternal` genuinely populates real container registrations on v1.0.3, matching its byte-identical-to-v1.0.2 code. The bug is now pinned to something downstream that's supposed to consume `ContainerInfos` — `OnUpdateAnyItemContainerDelegate` is the leading candidate, not yet checked. Zero crashes. Also tried finding the actual reader via the class's own vtable (101 entries captured safely, narrowed to ~19 candidates, four false-positive hits including the class destructor) — hit a genuine tooling wall (`objdump` has no cross-reference database), would need a real decompiler to go further that way. |
 | Native disassembly diff + ContainerInfos | **Real reverse-engineering, decisive negative on the function itself.** Attached `gdb` (via a disposable `--pid=host` container, since neither existing container nor bare Unraid has it) to the live v1.0.3 process and confirmed by breakpoint that the registration thunk and its real implementation are genuinely called with sane live arguments, and that both candidate early-bailout checks inside the implementation pass with real data. Correlated the same function's address in a freshly re-fetched v1.0.2 binary via its literal name string and a `{NamePtr, FuncPtr}` registration-table entry (verified against the already-known v1.0.3 address). Diffed the full implementation plus all three direct helper calls, normalizing address-only differences: empty diff both times — the entire native call chain is byte-identical between versions. Found a new lead via reflection instead: extended `CAMP_PROPERTY_DUMP` to resolve real names (reusing `resolve_transport_item_name()` unchanged), confirming the array this function writes into is named `ContainerInfos`. Zero crashes throughout. Full method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7. |
 | ProcessEvent dispatch check | **Accepted diagnostic, closes off the reflection-visible avenue.** Added `REG_META_FUNC` using two more real public `UFunction` methods (`GetReturnProperty()`, `GetFuncPtr()`) plus a `/proc/self/maps` module-resolution helper (plain `fopen`/`fgets`/`fclose`, not `std::ifstream`, per §6 item 10). Result: `has_return_value=0` (confirms a genuine `void` function), `func_ptr` resolves cleanly into `/PalServer-Linux-Shipping` — real native dispatch, not the Blueprint VM, not null. Confirms the whole reflection-visible call chain is intact on v1.0.3; whatever causes the no-op is inside the native function's own compiled logic. Fifth check this session, all clean/negative for a metadata-level explanation. Zero crashes. |
 | FunctionFlags capture | **Accepted diagnostic.** Confirmed `UFunction::GetFunctionFlags()` is a real public, non-version-gated wrapper around the private `GetFunctionFlagsBase()`/`GetFunctionFlags417()` accessors (read directly from `Class.hpp` and the generated member-layout header, not assumed) — the exact gap that deferred this at Step 4 time. Added `REG_META_FUNCTION_FLAGS`, captured `flags=0x40401` on live v1.0.3, decoded against the real `EFunctionFlags` enum: `FUNC_Final \| FUNC_Native \| FUNC_Private`. Mundane, nothing gating-looking, no v1.0.2 value to diff against. Fourth consecutive negative-but-verified result this session. |
