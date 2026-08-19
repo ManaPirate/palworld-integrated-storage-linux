@@ -661,8 +661,30 @@ effect.
   of this function. `OnUpdateAnyItemContainerDelegate` is the
   strongest concrete lead: if it's meant to fire on container-list
   change and isn't bound or firing on v1.0.3, that exactly explains
-  the whole symptom. Not yet checked. Full method in
-  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §§8-9.
+  the whole symptom.
+
+  **Checked, and hit the real edge of what's diagnosable with this
+  toolset.** Confirmed first that the code touching the delegate is
+  also inside the already-proven-unchanged real implementation and
+  helper (Step 7/9) — so if it's the missing link, the reference code
+  itself didn't change. Read its live binding state directly (same raw
+  `TArray`-field-read pattern as `ContainerInfos`, since
+  `FMulticastScriptDelegate` is just a `TArray<FScriptDelegate>`):
+  `count=0, max=0`. Surveyed 5 distinct storage modules across 3
+  guilds (reusing the pass's own pair list, no new discovery work):
+  all five `count=0`, no variance. Checked the original Windows mod's
+  own source (`src/dllmain.cpp`) for any reference — none, though not
+  conclusive either way since that mod solved cross-camp pooling via
+  client-side hooks and never touched this machinery at all.
+
+  Zero subscribers, consistent everywhere, is equally consistent with
+  "this is a client-only UI hook, correctly empty on a dedicated
+  server" and "something broke subscription to it on v1.0.3." Telling
+  those apart needs either a real decompiler (Ghidra/IDA) to trace who
+  should be subscribed, or a genuine v1.0.2 behavioral comparison
+  (blocked by save incompatibility) — neither available here. Zero
+  crashes throughout; production untouched. Full method in
+  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §§8-10.
 
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
@@ -703,6 +725,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Delegate binding check | **Real edge of what's diagnosable with this toolset reached.** Confirmed the code touching `OnUpdateAnyItemContainerDelegate` is inside the already-proven-unchanged real implementation and helper. Read its live binding state (same `TArray`-field-read pattern as `ContainerInfos`): `count=0, max=0`. Surveyed 5 distinct storage modules across 3 guilds: all `count=0`, no variance. Checked the original Windows mod's own source for any reference — none, not conclusive either way. Zero subscribers everywhere is consistent with both "this is a client-only UI hook, normal on a dedicated server" and "something broke subscription on v1.0.3" — can't distinguish without a real decompiler (cross-reference search, not available) or a working v1.0.2 behavioral comparison (blocked by save incompatibility). Zero crashes. |
 | ContainerInfos live-contents capture | **Decisive result: the write path is proven correct.** Read `ContainerInfos`' real `Count`/`Max`/`Data` fields directly, gated on `run>=3` so at least two full registration passes had already run against the exact instance observed. Result: `count=23`, all 10 sampled entries real, distinct, non-zero GUIDs. Confirms `OnAvailableConcreteModel_ServerInternal` genuinely populates real container registrations on v1.0.3, matching its byte-identical-to-v1.0.2 code. The bug is now pinned to something downstream that's supposed to consume `ContainerInfos` — `OnUpdateAnyItemContainerDelegate` is the leading candidate, not yet checked. Zero crashes. Also tried finding the actual reader via the class's own vtable (101 entries captured safely, narrowed to ~19 candidates, four false-positive hits including the class destructor) — hit a genuine tooling wall (`objdump` has no cross-reference database), would need a real decompiler to go further that way. |
 | Native disassembly diff + ContainerInfos | **Real reverse-engineering, decisive negative on the function itself.** Attached `gdb` (via a disposable `--pid=host` container, since neither existing container nor bare Unraid has it) to the live v1.0.3 process and confirmed by breakpoint that the registration thunk and its real implementation are genuinely called with sane live arguments, and that both candidate early-bailout checks inside the implementation pass with real data. Correlated the same function's address in a freshly re-fetched v1.0.2 binary via its literal name string and a `{NamePtr, FuncPtr}` registration-table entry (verified against the already-known v1.0.3 address). Diffed the full implementation plus all three direct helper calls, normalizing address-only differences: empty diff both times — the entire native call chain is byte-identical between versions. Found a new lead via reflection instead: extended `CAMP_PROPERTY_DUMP` to resolve real names (reusing `resolve_transport_item_name()` unchanged), confirming the array this function writes into is named `ContainerInfos`. Zero crashes throughout. Full method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7. |
 | ProcessEvent dispatch check | **Accepted diagnostic, closes off the reflection-visible avenue.** Added `REG_META_FUNC` using two more real public `UFunction` methods (`GetReturnProperty()`, `GetFuncPtr()`) plus a `/proc/self/maps` module-resolution helper (plain `fopen`/`fgets`/`fclose`, not `std::ifstream`, per §6 item 10). Result: `has_return_value=0` (confirms a genuine `void` function), `func_ptr` resolves cleanly into `/PalServer-Linux-Shipping` — real native dispatch, not the Blueprint VM, not null. Confirms the whole reflection-visible call chain is intact on v1.0.3; whatever causes the no-op is inside the native function's own compiled logic. Fifth check this session, all clean/negative for a metadata-level explanation. Zero crashes. |
