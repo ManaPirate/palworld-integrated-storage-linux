@@ -4273,6 +4273,180 @@ namespace
                     GuildKey{},
                     target_storage
                 );
+
+                // Step 7 follow-up (docs/V1.0.3_DIAGNOSTIC_PLAN.md):
+                // finding what reads ContainerInfos. Reading the raw
+                // vtable pointer (first 8 bytes of any UObject) and
+                // its entries is the same class of read as every other
+                // raw property/struct read in this file -- no call
+                // through any entry, no FName resolution, no
+                // destructor risk. Stops at the first entry that
+                // doesn't resolve into PalServer-Linux-Shipping itself
+                // (a proxy for "ran past the real vtable"), both as a
+                // safety margin and because further entries wouldn't
+                // be meaningful anyway. Gives a bounded list of every
+                // virtual function this exact class exposes, to
+                // disassemble looking for a ContainerInfos *reader*
+                // (a scan/consume shape) instead of searching blind
+                // through the whole binary.
+                auto* const* const vtable =
+                    *reinterpret_cast<
+                        void* const* const*
+                    >(target_storage);
+
+                if (vtable != nullptr)
+                {
+                    for (
+                        std::size_t vt_index{};
+                        vt_index < 220;
+                        ++vt_index
+                    )
+                    {
+                        const auto entry =
+                            reinterpret_cast<
+                                std::uintptr_t
+                            >(vtable[vt_index]);
+
+                        if (entry == 0)
+                        {
+                            break;
+                        }
+
+                        const auto module_name =
+                            resolve_module_for_address(
+                                entry
+                            );
+
+                        if (
+                            module_name !=
+                                "/PalServer-Linux-"
+                                "Shipping"
+                        )
+                        {
+                            break;
+                        }
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "VTABLE_ENTRY "
+                            "role=storage_module "
+                            "index=%zu addr=0x%llx",
+                            vt_index,
+                            static_cast<
+                                unsigned long long
+                            >(entry)
+                        );
+                    }
+                }
+            }
+
+            // Step 7 follow-up: does ContainerInfos actually gain
+            // entries after real registration passes run, or does it
+            // stay empty despite the unchanged write code? The probe
+            // fires before this pass's own
+            // run_controlled_full_plan_registration() call, so by
+            // run>=3 at least two full registration passes have
+            // already completed against this exact instance. Raw
+            // TArray field reads (Data at +0x50, Count at +0x58) --
+            // same class of access as every other struct/array read in
+            // this file. Entry stride (0x28) and the leading 16-byte
+            // GUID come from the Step 7 disassembly work, not guessed.
+            static bool container_infos_dump_done{};
+
+            if (!container_infos_dump_done && run >= 3)
+            {
+                container_infos_dump_done = true;
+
+                auto* const base =
+                    reinterpret_cast<std::byte*>(
+                        target_storage
+                    );
+
+                void* const data_ptr =
+                    *reinterpret_cast<void* const*>(
+                        base + 0x50
+                    );
+
+                const auto count =
+                    *reinterpret_cast<
+                        const std::int32_t*
+                    >(base + 0x58);
+
+                const auto max =
+                    *reinterpret_cast<
+                        const std::int32_t*
+                    >(base + 0x5c);
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "CONTAINER_INFOS_STATE run=%llu "
+                    "count=%d max=%d data_null=%d",
+                    static_cast<unsigned long long>(
+                        run
+                    ),
+                    count,
+                    max,
+                    data_ptr == nullptr ? 1 : 0
+                );
+
+                if (
+                    data_ptr != nullptr &&
+                    count > 0
+                )
+                {
+                    const auto entry_limit =
+                        std::min(count, 10);
+
+                    for (
+                        std::int32_t entry_index{};
+                        entry_index < entry_limit;
+                        ++entry_index
+                    )
+                    {
+                        auto* const entry =
+                            static_cast<std::byte*>(
+                                data_ptr
+                            ) +
+                                static_cast<
+                                    std::size_t
+                                >(entry_index) * 40;
+
+                        GuildKey entry_guid{};
+
+                        std::memcpy(
+                            entry_guid.data(),
+                            entry,
+                            entry_guid.size()
+                        );
+
+                        std::uint8_t type_byte{};
+
+                        std::memcpy(
+                            &type_byte,
+                            entry + 0x10,
+                            sizeof(type_byte)
+                        );
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "CONTAINER_INFO_ENTRY "
+                            "run=%llu index=%d "
+                            "guid=%s type_byte=%d "
+                            "guid_zero=%d",
+                            static_cast<
+                                unsigned long long
+                            >(run),
+                            entry_index,
+                            guid_to_hex(
+                                entry_guid
+                            ).data(),
+                            type_byte,
+                            guid_is_zero(
+                                entry_guid
+                            ) ? 1 : 0
+                        );
+                    }
+                }
             }
         }
 
