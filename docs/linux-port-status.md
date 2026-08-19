@@ -509,8 +509,40 @@ effect.
   Tested the largest eligible guild in the test server's real data
   (4 camps, 31 chests) and the smallest (2 camps) — both
   `RESULT=UNCHANGED`, same no-op. Guild size is not the gating factor.
-  Camp distance, storage class, and module remove/re-add (the other
-  three Step 5 bullets) are still untested.
+
+  **Step 5, storage-class bullet: not applicable, confirmed from the
+  code itself, 19 Aug 2026.** No live test needed —
+  `get_storage_module_class()`
+  (`/Script/Pal.PalBaseCampModuleItemStorage`) is the only class the
+  mod's own discovery logic ever accepts into `storage_camps`
+  (`main.cpp` ~900-905), so every storage this mod tracks and targets
+  for registration is already guaranteed to be that one class. There's
+  no variance reachable through this mod's own pipeline to test.
+
+  **Step 5, distance bullet answered, 19 Aug 2026: no.** Camp location
+  isn't stored directly on the camp model — found via a new
+  `CAMP_PROPERTY_DUMP` diagnostic (same positional/kind pattern as
+  `REG_META_PARAM`) extended to recurse one level into the camp
+  model's object-reference properties and identify a real
+  `/Script/CoreUObject.Vector` struct by actual struct-identity
+  comparison (24 bytes, confirming double-precision Large World
+  Coordinates in this engine build, not the older 12-byte
+  single-float layout). Real coordinates: large guild's camps
+  ≈128,535 units apart, small guild's camps ≈15,645 units apart — an
+  ~8x spread — both `RESULT=UNCHANGED`. Distance is not the gating
+  factor.
+
+  Three of Step 5's four bullets are now closed (guild size: no;
+  storage class: not applicable; distance: no). The fourth, module
+  remove/re-add, isn't reachable from SSH-only diagnostic builds — it
+  needs either a live client physically doing it, or substantial new
+  *mutating* native code to fake it, a materially bigger and riskier
+  ask than anything else done this session. RCON is exposed on the
+  test server but Palworld's RCON command set doesn't cover
+  item/module-level state, only server/player administration. Three
+  negative results in a row is looking less like "gated on some
+  topological property" and more like a blanket no-op, worth weighing
+  before sinking more effort into remove/re-add specifically.
 
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
@@ -551,6 +583,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Step 5 distance + storage-class | **Accepted diagnostic, closes two more Step 5 bullets.** Storage-class ruled not-applicable directly from the code (`get_storage_module_class()` is the only class the discovery pipeline ever accepts). Distance required finding real camp coordinates: added `CAMP_PROPERTY_DUMP` (positional/kind dump of a camp's own properties, `REG_META_PARAM`'s pattern applied to a `UObject` instead of a `UFunction`), extended to recurse one level into object-reference properties and identify a genuine `/Script/CoreUObject.Vector` struct by real struct-identity comparison. Found it 24 bytes in (double-precision LWC, not the 12-byte single-float layout an initial guess assumed — that misread produced garbage floats until corrected). Real coordinates confirmed an ~8x distance spread between a small and large guild's camp pairs (≈15,645 vs ≈128,535 units), both `RESULT=UNCHANGED`. Distance ruled out as the gating factor. Zero crashes across the whole sequence. |
 | Step 5 guild-size variant | **Accepted diagnostic.** Added `SemanticObservationTargetGuildHex`, a compile-time constant letting `SEMANTIC_OBSERVATION` target a specific guild instead of always the first eligible one in sorted order. Built and tested against the test server's largest (4 camps, 31 chests) and smallest (2 camps) eligible guilds: both `RESULT=UNCHANGED`. Guild size ruled out as the gating factor for problem 2. Getting there took a detour: a `std::ifstream`-based runtime file version of the same idea caused a reproducible `FMallocBinned2` allocator-corruption crash the moment the file was opened, independent of guild targeted or parse success — isolated properly, reverted, and rebuilt on the compile-time approach instead (§6 item 10). |
 | Step 4 signature check | **Resolved, corrected an earlier misread.** Captured `REG_META_PARAM` against a real v1.0.3 server for the first time (this project's own test/production infra turned out to already run the exact `main.so` hash `w00z001` used in their reproduction). Result: one 8-byte object parameter that exactly fills the `parms=8` block. Confirmed against the real SDK header that `GetParmsSize()` returns a byte size, not a parameter count — the "other seven parameter bytes" framing this doc previously carried was wrong. Current v1.0.3 signature is now fully characterized. Closed without a v1.0.2 baseline capture. |
 | Release v1.0.0 | **Shipped, server-only.** Fast-forwarded `claude/palworld-linux-storage-mod-gx9n5d` (containing every accepted stage through 4F plus the full release validation) directly onto `main` — a strict ancestor relationship, so no merge conflicts. Full release validation (`docs/RELEASE_TEST_PLAN.md`) ran across the isolated NullPrism test server and then a multi-hour real production deploy (7-8 concurrent guilds, ~20 camps, multiple players): clean startup markers, `blocked=0 exceptions=0` sustained for hours, zero `FMallocBinned2`/crash markers, guild isolation confirmed (including an actual leave-guild/new-guild test), cross-camp consumption confirmed exact (verified material counts at the true source, not just the destination), a full production container restart mid-session recovered cleanly, and `VmRSS` growth over a 2-hour window was ~3.6 MB — negligible, consistent with the already-accepted Stage 4D.9f leak-and-cache curve. One isolated client disconnect during a deconstruct attempt was investigated and traced to the affected player's own GPU instability (self-diagnosed, not reproduced by a second player performing the identical action), not a mod defect. Release ships `main.so` only — see §8 for the scope decision and `docs/USER_GUIDE.md` for the install guide and known-behavior notes (rejoin-while-inside-camp refresh quirk, rare stuck-camp state) carried forward from `RELEASE_TEST_PLAN.md` §8. |
