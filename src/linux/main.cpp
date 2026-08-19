@@ -4274,6 +4274,96 @@ namespace
                     target_storage
                 );
 
+                // Step 11 (docs/V1.0.3_DIAGNOSTIC_PLAN.md): the
+                // delegate-binding check (Step 10) found zero
+                // subscribers on OnUpdateAnyItemContainerDelegate.
+                // Re-firing it ourselves would prove nothing --
+                // broadcasting an empty multicast delegate is a no-op
+                // regardless of who fires it. The real lead is finding
+                // what's SUPPOSED to be subscribed, i.e. what's meant
+                // to consume a registration once ContainerInfos gains
+                // an entry. Enumerating every UFunction on this exact
+                // class's own chain costs nothing new: UStruct's
+                // ForEachFunctionInChain() is the function-side
+                // sibling of ForEachProperty(), already used unchanged
+                // in emit_camp_property_dump() above, so this reuses
+                // the same proven-safe reflection walk, just over
+                // UFunction instead of FProperty. If a container
+                // refresh/update method exists on this class, this
+                // finds it directly, with zero RE tooling.
+                if (auto* const storage_class =
+                        target_storage->GetClassPrivate();
+                    storage_class != nullptr)
+                {
+                    std::size_t function_index{};
+
+                    for (
+                        auto* candidate_function :
+                            storage_class->
+                                ForEachFunctionInChain()
+                    )
+                    {
+                        if (candidate_function == nullptr)
+                        {
+                            continue;
+                        }
+
+                        // Same leak-and-cache FName resolution as
+                        // emit_camp_property_dump() (property->
+                        // GetFName()) -- UFunction inherits GetFName()
+                        // from UObject/UField, same 8-byte shape the
+                        // cache already keys on.
+                        const auto field_name =
+                            candidate_function->
+                                GetFName();
+
+                        TransportItemNameKey
+                            name_key{};
+
+                        std::memcpy(
+                            name_key.data(),
+                            &field_name,
+                            name_key.size()
+                        );
+
+                        const auto& resolved_name =
+                            resolve_transport_item_name(
+                                name_key
+                            );
+
+                        const auto func_ptr =
+                            reinterpret_cast<
+                                std::uintptr_t
+                            >(
+                                candidate_function->
+                                    GetFuncPtr()
+                            );
+
+                        emit_format(
+                            "[ModIntegratedStorageCpp] "
+                            "STORAGE_CLASS_FUNCTION "
+                            "index=%zu name=%s "
+                            "flags=0x%x func_module=%s",
+                            function_index,
+                            resolved_name.c_str(),
+                            candidate_function->
+                                GetFunctionFlags(),
+                            resolve_module_for_address(
+                                func_ptr
+                            ).c_str()
+                        );
+
+                        ++function_index;
+                    }
+
+                    emit_format(
+                        "[ModIntegratedStorageCpp] "
+                        "STORAGE_CLASS_FUNCTION_COUNT "
+                        "total=%zu",
+                        function_index
+                    );
+                }
+
                 // Step 7 follow-up (docs/V1.0.3_DIAGNOSTIC_PLAN.md):
                 // finding what reads ContainerInfos. Reading the raw
                 // vtable pointer (first 8 bytes of any UObject) and
