@@ -709,6 +709,39 @@ effect.
   client. Not yet tested. Full method in
   `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §11.
 
+  **Step 12 — the pivotal result of the whole investigation: ran the
+  real test, mechanism confirmed working end-to-end.** The operator
+  ran the diagnostic mod against their own real guild: walked between
+  a pre-existing camp ("Camp A") and a freshly-built second camp under
+  the same guild ("Camp B") repeatedly over ~40 minutes.
+  `OnRep_ContainerInfos` fired **8 times**, clearly tracking the real
+  camp visits, not just once at connect — falsifying the Step 11
+  hypothesis in its strong form. Then, with empty personal inventory
+  and empty Camp B storage, the operator **actually built** at Camp B
+  using materials sitting only in Camp A — a real placed build, not
+  just a UI count.
+
+  This is the first genuine end-to-end test in the whole
+  investigation. Every earlier "reproduces" result across Steps 4–11
+  (`SEMANTIC_OBSERVATION RESULT=UNCHANGED`, registration/replication
+  counts) was a read-only reflection diagnostic against the server's
+  own state, never a live client actually attempting to build with
+  cross-camp materials — and this is the first time that specific
+  test has been run on this v1.0.3 build. It passed, with a realistic
+  mixed old-camp/new-camp guild.
+
+  **This doesn't mean the original reports were wrong, or that
+  problem 2 is closed.** It means registration, replication, and the
+  build UI are all now confirmed correct together under these
+  conditions, so whatever's actually failing for the original
+  reporters (w00z001 and others) hasn't been isolated — the search
+  needs a different axis from here: scale (many more camps/guildmates
+  than this 2-camp test), timing (a client already nearby when a camp
+  gets newly cross-registered vs. becoming relevant afterward), or
+  something specific to those reporters' own setups. The mechanism
+  itself is no longer the suspect. Zero crashes throughout. Full
+  method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §12.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -748,6 +781,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Real end-to-end build test | **Pivotal result of the whole investigation.** Ran the `IntegratedStorageDiag` client mod against the operator's real guild: walked between a pre-existing camp and a freshly-built second camp repeatedly over ~40 minutes. `OnRep_ContainerInfos` fired 8 times, clearly tracking real camp visits, not just once at connect — falsifies the replication-broken hypothesis. With empty personal inventory and empty destination-camp storage, the operator then **actually built** using materials from the other camp — a real placed build, not just a UI count. First genuine end-to-end test in the investigation: every earlier "reproduces" result (Steps 4–11) was a read-only reflection diagnostic against server state, never a live build attempt. Registration, replication, and the build UI are now confirmed correct together under these conditions. Doesn't mean the original reports were wrong — means the mechanism itself is no longer the suspect, and finding what's actually failing for the original reporters needs a different axis (scale, timing, or reporter-specific setup). Removed the throwaway guild-coordinate-dump helper used to locate a test guild, superseded once the operator built their own second camp. Zero crashes. |
 | Storage class UFunction enumeration | **New lead found, real diagnosis shift.** Before reaching for a decompiler on the delegate lead, tried something cheaper: enumerated every `UFunction` on the storage module class's own chain via reflection (`UStruct::ForEachFunctionInChain()`, same pattern as `ForEachProperty()` already used for `CAMP_PROPERTY_DUMP`) — zero new tooling. Found `OnRep_ContainerInfos` among the nine functions returned. `OnRep_` functions are Unreal's replication-notify callbacks, fired on a client only when a replicated property change actually reaches it over the network — meaning every prior read of `ContainerInfos` (including the decisive 23-entry capture) only ever measured the server's own local copy, not whether it replicates. Also found `OnNotAvailableConcreteModel_ServerInternal` (the unregister counterpart) and confirmed `OnUpdateAnyItemContainerDelegate`'s signature function (`MulticastReturnSelfAndUpdatedContainerDelegate__DelegateSignature`), reinforcing the delegate really is a plain notify hook, not the replication path. New hypothesis: the server-side write is correct but isn't reaching clients over replication on v1.0.3. `OnRep_` callbacks never fire on the authority itself, so nothing server-side (including host/SP) can confirm this — prepared a throwaway, read-only Windows client-side UE4SS Lua mod (`tools/client-diagnostics/IntegratedStorageDiag/`) that just logs when the OnRep fires, for testing against a real vanilla client. Not yet run. Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 11. |
 | Delegate binding check | **Real edge of what's diagnosable with this toolset reached.** Confirmed the code touching `OnUpdateAnyItemContainerDelegate` is inside the already-proven-unchanged real implementation and helper. Read its live binding state (same `TArray`-field-read pattern as `ContainerInfos`): `count=0, max=0`. Surveyed 5 distinct storage modules across 3 guilds: all `count=0`, no variance. Checked the original Windows mod's own source for any reference — none, not conclusive either way. Zero subscribers everywhere is consistent with both "this is a client-only UI hook, normal on a dedicated server" and "something broke subscription on v1.0.3" — can't distinguish without a real decompiler (cross-reference search, not available) or a working v1.0.2 behavioral comparison (blocked by save incompatibility). Zero crashes. |
 | ContainerInfos live-contents capture | **Decisive result: the write path is proven correct.** Read `ContainerInfos`' real `Count`/`Max`/`Data` fields directly, gated on `run>=3` so at least two full registration passes had already run against the exact instance observed. Result: `count=23`, all 10 sampled entries real, distinct, non-zero GUIDs. Confirms `OnAvailableConcreteModel_ServerInternal` genuinely populates real container registrations on v1.0.3, matching its byte-identical-to-v1.0.2 code. The bug is now pinned to something downstream that's supposed to consume `ContainerInfos` — `OnUpdateAnyItemContainerDelegate` is the leading candidate, not yet checked. Zero crashes. Also tried finding the actual reader via the class's own vtable (101 entries captured safely, narrowed to ~19 candidates, four false-positive hits including the class destructor) — hit a genuine tooling wall (`objdump` has no cross-reference database), would need a real decompiler to go further that way. |
