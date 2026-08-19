@@ -597,6 +597,46 @@ effect.
   depot downgrade to diff addresses/behavior directly. Neither attempted
   yet — a real scope decision, not something to default into.
 
+  **Both pursued, 20 Aug 2026.** The v1.0.2-behavioral-diff attempt is
+  covered above (blocked by save incompatibility). Native disassembly
+  went further: using a disposable `--pid=host --cap-add=SYS_PTRACE`
+  container for `gdb` (neither existing container had it, nor does
+  bare Unraid), confirmed by live breakpoint that `func_ptr=0x6964360`
+  is the real `DEFINE_FUNCTION`-style thunk, that it calls a real
+  implementation at `0x700eac0` with genuine `(Context, Param)`
+  arguments, and that two candidate early-bailout checks inside that
+  implementation (a `bool` flag, a GUID-zero check) both **pass** with
+  real non-trivial live data — neither is silently short-circuiting.
+
+  Correlated the same function's address in a genuine v1.0.2 binary
+  (re-fetched the same way as the earlier attempt, this time purely
+  for static comparison — no launch, no save needed) by searching for
+  the literal function name string in both files, computing its
+  virtual address in each, then finding a `{NamePtr, FuncPtr}`
+  registration-table entry referencing it — verified correct because
+  the v1.0.3 entry's `FuncPtr` exactly matched the already-known
+  `0x6964360`. Diffed the full ~1600-byte implementation and all three
+  of its direct helper calls between versions, normalizing out
+  address-only differences: **empty diff**. The entire native call
+  chain for this function is byte-for-byte unchanged between v1.0.2
+  and v1.0.3. The no-op is not inside
+  `OnAvailableConcreteModel_ServerInternal` or anything it directly
+  calls.
+
+  Found a real new lead via reflection instead: extended
+  `CAMP_PROPERTY_DUMP` to resolve real property names (reusing
+  `resolve_transport_item_name()` verbatim — `property->GetFName()`,
+  same proven leak-and-cache call, not a new FName-resolution path;
+  verified zero crashes before trusting it). The `TArray` the
+  disassembly showed being written via a `memmove`-based insert is
+  named **`ContainerInfos`**, on the same class as
+  `GuildContainerInfo` and a delegate, `OnUpdateAnyItemContainerDelegate`
+  — the delegate is worth keeping in mind as its own plausible
+  "write happens, nothing downstream reacts" mechanism. Not yet done:
+  capturing `ContainerInfos`' actual contents after a real registration
+  pass, or finding what else reads it. Full method in
+  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -636,6 +676,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Native disassembly diff + ContainerInfos | **Real reverse-engineering, decisive negative on the function itself.** Attached `gdb` (via a disposable `--pid=host` container, since neither existing container nor bare Unraid has it) to the live v1.0.3 process and confirmed by breakpoint that the registration thunk and its real implementation are genuinely called with sane live arguments, and that both candidate early-bailout checks inside the implementation pass with real data. Correlated the same function's address in a freshly re-fetched v1.0.2 binary via its literal name string and a `{NamePtr, FuncPtr}` registration-table entry (verified against the already-known v1.0.3 address). Diffed the full implementation plus all three direct helper calls, normalizing address-only differences: empty diff both times — the entire native call chain is byte-identical between versions. Found a new lead via reflection instead: extended `CAMP_PROPERTY_DUMP` to resolve real names (reusing `resolve_transport_item_name()` unchanged), confirming the array this function writes into is named `ContainerInfos`. Zero crashes throughout. Full method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7. |
 | ProcessEvent dispatch check | **Accepted diagnostic, closes off the reflection-visible avenue.** Added `REG_META_FUNC` using two more real public `UFunction` methods (`GetReturnProperty()`, `GetFuncPtr()`) plus a `/proc/self/maps` module-resolution helper (plain `fopen`/`fgets`/`fclose`, not `std::ifstream`, per §6 item 10). Result: `has_return_value=0` (confirms a genuine `void` function), `func_ptr` resolves cleanly into `/PalServer-Linux-Shipping` — real native dispatch, not the Blueprint VM, not null. Confirms the whole reflection-visible call chain is intact on v1.0.3; whatever causes the no-op is inside the native function's own compiled logic. Fifth check this session, all clean/negative for a metadata-level explanation. Zero crashes. |
 | FunctionFlags capture | **Accepted diagnostic.** Confirmed `UFunction::GetFunctionFlags()` is a real public, non-version-gated wrapper around the private `GetFunctionFlagsBase()`/`GetFunctionFlags417()` accessors (read directly from `Class.hpp` and the generated member-layout header, not assumed) — the exact gap that deferred this at Step 4 time. Added `REG_META_FUNCTION_FLAGS`, captured `flags=0x40401` on live v1.0.3, decoded against the real `EFunctionFlags` enum: `FUNC_Final \| FUNC_Native \| FUNC_Private`. Mundane, nothing gating-looking, no v1.0.2 value to diff against. Fourth consecutive negative-but-verified result this session. |
 | Step 5 distance + storage-class | **Accepted diagnostic, closes two more Step 5 bullets.** Storage-class ruled not-applicable directly from the code (`get_storage_module_class()` is the only class the discovery pipeline ever accepts). Distance required finding real camp coordinates: added `CAMP_PROPERTY_DUMP` (positional/kind dump of a camp's own properties, `REG_META_PARAM`'s pattern applied to a `UObject` instead of a `UFunction`), extended to recurse one level into object-reference properties and identify a genuine `/Script/CoreUObject.Vector` struct by real struct-identity comparison. Found it 24 bytes in (double-precision LWC, not the 12-byte single-float layout an initial guess assumed — that misread produced garbage floats until corrected). Real coordinates confirmed an ~8x distance spread between a small and large guild's camp pairs (≈15,645 vs ≈128,535 units), both `RESULT=UNCHANGED`. Distance ruled out as the gating factor. Zero crashes across the whole sequence. |
