@@ -826,6 +826,19 @@ namespace
     constexpr char SemanticObservationTargetGuildHex[] =
         "";
 
+    // Throwaway, one-shot test: forces a genuine value-change (not
+    // just a relevancy-transition) on OnRep_ContainerInfos for a real
+    // connected client who stays continuously parked at one camp --
+    // the untested case from docs/V1.0.3_DIAGNOSTIC_PLAN.md Step 12.
+    // Same compile-time-guild-hex pattern as
+    // SemanticObservationTargetGuildHex above, for the same reason
+    // (the std::ifstream runtime-config crash, docs/linux-port-
+    // status.md S6 item 10) -- empty string = fully inert, identical
+    // behavior to every build before this one. Never meant to stay in
+    // the codebase past this one test; remove once it's run.
+    constexpr char UnregisterTestTargetGuildHex[] =
+        "";
+
     struct SemanticObservationTarget
     {
         bool has_guild{};
@@ -14874,6 +14887,239 @@ namespace
                     {
                         ++duplicate_pairs;
                         continue;
+                    }
+
+                    // Throwaway one-shot (see UnregisterTestTargetGuildHex
+                    // above): on the first pair found for the target
+                    // guild, force-unregister it via the discovered
+                    // OnNotAvailableConcreteModel_ServerInternal
+                    // counterpart function, then exclude that exact pair
+                    // from planned_execution_pairs for two full passes
+                    // (~16s of real elapsed time) before letting it flow
+                    // through normally again. The already-existing
+                    // unconditional executor then re-registers it on a
+                    // LATER, separate pass -- a genuine value change with
+                    // real time separation from the removal, not a
+                    // same-tick remove+re-add that replication could
+                    // coalesce into "no net change". Verifies the
+                    // function's own parameter layout via reflection
+                    // first (same REG_META-style checks already used for
+                    // the register function), rather than calling it
+                    // blind.
+                    {
+                        static const GuildKey
+                            unregister_test_target_guild = [] {
+                                GuildKey key{};
+
+                                parse_hex_guid_plain(
+                                    UnregisterTestTargetGuildHex,
+                                    key
+                                );
+
+                                return key;
+                            }();
+
+                        static bool
+                            unregister_test_started{};
+
+                        static RC::Unreal::UObject*
+                            unregister_test_excluded_chest{};
+
+                        static RC::Unreal::UObject*
+                            unregister_test_excluded_storage{};
+
+                        static int
+                            unregister_test_exclude_passes_remaining{};
+
+                        if (
+                            !unregister_test_started &&
+                            guild_key ==
+                                unregister_test_target_guild
+                        )
+                        {
+                            unregister_test_started = true;
+
+                            auto* const unregister_function =
+                                storage->
+                                    GetFunctionByNameInChain(
+                                        STR(
+                                            "OnNotAvailableConcreteModel_"
+                                            "ServerInternal"
+                                        )
+                                    );
+
+                            std::size_t
+                                unregister_parameter_bytes{};
+                            std::int32_t
+                                unregister_parameter_offset{-1};
+                            std::int32_t
+                                unregister_property_size{-1};
+
+                            if (unregister_function != nullptr)
+                            {
+                                unregister_parameter_bytes =
+                                    static_cast<std::size_t>(
+                                        unregister_function->
+                                            GetParmsSize()
+                                    );
+
+                                for (
+                                    auto* unregister_property :
+                                        unregister_function->
+                                            ForEachProperty()
+                                )
+                                {
+                                    if (
+                                        unregister_property ==
+                                            nullptr ||
+                                        !unregister_property->
+                                            HasAnyPropertyFlags(
+                                                RC::Unreal::CPF_Parm
+                                            ) ||
+                                        unregister_property->
+                                            HasAnyPropertyFlags(
+                                                RC::Unreal::
+                                                    CPF_ReturnParm
+                                            )
+                                    )
+                                    {
+                                        continue;
+                                    }
+
+                                    auto* const
+                                        unregister_object_property =
+                                            RC::Unreal::CastField<
+                                                RC::Unreal::
+                                                    FObjectProperty
+                                            >(unregister_property);
+
+                                    if (
+                                        unregister_object_property !=
+                                            nullptr
+                                    )
+                                    {
+                                        unregister_parameter_offset =
+                                            unregister_object_property->
+                                                GetOffset_Internal();
+
+                                        unregister_property_size =
+                                            unregister_object_property->
+                                                GetSize();
+
+                                        break;
+                                    }
+                                }
+                            }
+
+                            const bool unregister_layout_valid =
+                                unregister_function != nullptr &&
+                                unregister_parameter_offset >= 0 &&
+                                unregister_property_size ==
+                                    static_cast<std::int32_t>(
+                                        sizeof(RC::Unreal::UObject*)
+                                    ) &&
+                                unregister_parameter_bytes >=
+                                    sizeof(RC::Unreal::UObject*);
+
+                            emit_format(
+                                "[ModIntegratedStorageCpp] "
+                                "UNREGISTER_TEST guild=%s "
+                                "function=%d parms=%zu offset=%d "
+                                "size=%d layout_valid=%d",
+                                guid_to_hex(guild_key).data(),
+                                unregister_function != nullptr ?
+                                    1 : 0,
+                                unregister_parameter_bytes,
+                                unregister_parameter_offset,
+                                unregister_property_size,
+                                unregister_layout_valid ? 1 : 0
+                            );
+
+                            if (unregister_layout_valid)
+                            {
+                                auto unregister_parameters =
+                                    std::make_unique<std::byte[]>(
+                                        unregister_parameter_bytes
+                                    );
+
+                                std::memset(
+                                    unregister_parameters.get(),
+                                    0,
+                                    unregister_parameter_bytes
+                                );
+
+                                auto* unregister_chest_arg = chest;
+
+                                std::memcpy(
+                                    unregister_parameters.get() +
+                                        static_cast<std::size_t>(
+                                            unregister_parameter_offset
+                                        ),
+                                    &unregister_chest_arg,
+                                    sizeof(unregister_chest_arg)
+                                );
+
+                                try
+                                {
+                                    storage->ProcessEvent(
+                                        unregister_function,
+                                        unregister_parameters.get()
+                                    );
+
+                                    unregister_test_excluded_chest =
+                                        chest;
+
+                                    unregister_test_excluded_storage =
+                                        storage;
+
+                                    unregister_test_exclude_passes_remaining =
+                                        2;
+
+                                    emit_marker(
+                                        "[ModIntegratedStorageCpp] "
+                                        "UNREGISTER_TEST "
+                                        "RESULT=CALLED"
+                                    );
+                                }
+                                catch (...)
+                                {
+                                    emit_marker(
+                                        "[ModIntegratedStorageCpp] "
+                                        "UNREGISTER_TEST "
+                                        "RESULT=EXCEPTION"
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                emit_marker(
+                                    "[ModIntegratedStorageCpp] "
+                                    "UNREGISTER_TEST "
+                                    "RESULT=BAD_LAYOUT"
+                                );
+                            }
+                        }
+
+                        if (
+                            unregister_test_exclude_passes_remaining >
+                                0 &&
+                            chest ==
+                                unregister_test_excluded_chest &&
+                            storage ==
+                                unregister_test_excluded_storage
+                        )
+                        {
+                            --unregister_test_exclude_passes_remaining;
+
+                            emit_format(
+                                "[ModIntegratedStorageCpp] "
+                                "UNREGISTER_TEST_EXCLUDE "
+                                "passes_remaining=%d",
+                                unregister_test_exclude_passes_remaining
+                            );
+
+                            continue;
+                        }
                     }
 
                     ++guild_pairs;
