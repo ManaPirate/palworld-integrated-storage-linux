@@ -870,13 +870,20 @@ namespace
     // A: positional/kind dump of a camp's own properties, the same
     // established pattern as REG_META_PARAM (Step 4), applied to a
     // different UStruct-derived object instead of a UFunction's
-    // parameters. Never resolves a property name via
-    // FName::ToString() -- kind + offset + size, plus a struct-identity
-    // check against a known UScriptStruct for the vector case, is
-    // enough to find a location-shaped field without that hazard.
-    // Deliberately read-only and only emitted when a target guild is
-    // configured (see SemanticObservationTargetGuildHex above), so
-    // default behavior and log volume are unaffected.
+    // parameters. Property names are resolved too (added when this got
+    // reused for the storage-module dump below), but only via the
+    // proven leak-and-cache resolve_transport_item_name() pattern
+    // (Stage 4D.9g) -- never a raw FName::ToString() call. Deliberately
+    // read-only.
+    //
+    // Forward declaration: resolve_transport_item_name() is defined
+    // further down (it's generic over any 8-byte FName key, despite the
+    // name -- see its own comment), this function is defined here
+    // because it's also used by the earlier, Step-5-era camp dump.
+    auto resolve_transport_item_name(
+        const TransportItemNameKey& key
+    ) noexcept -> const std::string&;
+
     auto emit_camp_property_dump(
         const char* role,
         const GuildKey& guild,
@@ -978,6 +985,33 @@ namespace
                 kind = "bool";
             }
 
+            // Same leak-and-cache pattern already proven safe for item
+            // names (resolve_transport_item_name(), Stage 4D.9g) --
+            // reused verbatim, not reimplemented, per CLAUDE.md's rule
+            // on FName resolution. property->GetFName() returns the
+            // FName by value; its raw 8 bytes are the same shape this
+            // cache already keys on.
+            const std::string* property_name = nullptr;
+
+            {
+                const auto field_name =
+                    property->GetFName();
+
+                TransportItemNameKey
+                    name_key{};
+
+                std::memcpy(
+                    name_key.data(),
+                    &field_name,
+                    name_key.size()
+                );
+
+                property_name =
+                    &resolve_transport_item_name(
+                        name_key
+                    );
+            }
+
             // Raw float dump for struct-kind properties only, same
             // class of read as SEMANTIC_OBSERVATION's existing raw
             // container/item/stack byte reads above -- pure memory the
@@ -1067,11 +1101,13 @@ namespace
             emit_format(
                 "[ModIntegratedStorageCpp] "
                 "CAMP_PROPERTY_DUMP role=%s guild=%s "
-                "index=%zu kind=%s offset=%d size=%d "
-                "element_size=%d is_vector=%d floats=%s",
+                "index=%zu name=%s kind=%s offset=%d "
+                "size=%d element_size=%d is_vector=%d "
+                "floats=%s",
                 role,
                 guid_to_hex(guild).data(),
                 index,
+                property_name->c_str(),
                 kind,
                 property->GetOffset_Internal(),
                 property->GetSize(),
@@ -4214,6 +4250,30 @@ namespace
                             "ServerInternal"
                         )
                     );
+
+            // Reflection-side counterpart to the native disassembly
+            // work in docs/V1.0.3_DIAGNOSTIC_PLAN.md: the native
+            // OnAvailableConcreteModel_ServerInternal implementation
+            // (and every helper it calls) is confirmed byte-identical
+            // between v1.0.2 and v1.0.3, so it writes into whatever
+            // this array is exactly the same way either version. This
+            // dumps the storage module's own property layout once, to
+            // find that array's real offset/kind by reflection instead
+            // of guessing further from raw disassembly -- reuses
+            // emit_camp_property_dump() unchanged, since it's already
+            // generic over any UObject*, not camp-specific.
+            static bool storage_dump_done{};
+
+            if (!storage_dump_done)
+            {
+                storage_dump_done = true;
+
+                emit_camp_property_dump(
+                    "storage_module",
+                    GuildKey{},
+                    target_storage
+                );
+            }
         }
 
         std::size_t parameter_bytes{};
