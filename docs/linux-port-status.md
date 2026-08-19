@@ -544,6 +544,29 @@ effect.
   topological property" and more like a blanket no-op, worth weighing
   before sinking more effort into remove/re-add specifically.
 
+  **`FunctionFlags` checked, 19 Aug 2026: real value captured, still
+  nothing gating-looking.** The item deferred at Step 4 time — the
+  vendored SDK's version-specific accessors
+  (`GetFunctionFlagsBase()`/`GetFunctionFlags417()`) are genuinely
+  `private`
+  (`generated_include/MemberVariableLayout_HeaderWrapper_UFunction.hpp`),
+  confirmed by reading that header directly, not assumed. But
+  `UFunction::GetFunctionFlags()` itself, declared `public` in
+  `Class.hpp`, is a real non-version-gated wrapper around them. Added a
+  `REG_META_FUNCTION_FLAGS` log line using it. Captured on the live
+  v1.0.3 test server: `flags=0x40401`, decoded against the actual
+  `EFunctionFlags` enum in `UnrealFlags.hpp` (not from memory):
+  `FUNC_Final (0x1) | FUNC_Native (0x400) | FUNC_Private (0x40000)`.
+  Mundane — `FUNC_Private` only restricts Blueprint-graph visibility,
+  irrelevant to native `ProcessEvent` dispatch; no `FUNC_Net*`, no
+  `FUNC_BlueprintCallable`, nothing suggesting an added precondition.
+  No v1.0.2 value exists to diff against (that baseline was never
+  captured), so this rules out the current value looking gating-related
+  but can't rule out a change between versions. Fourth consecutive
+  negative-but-verified result this session on everything
+  reflection-inspectable (signature, guild size, distance, function
+  flags).
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -583,6 +606,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| FunctionFlags capture | **Accepted diagnostic.** Confirmed `UFunction::GetFunctionFlags()` is a real public, non-version-gated wrapper around the private `GetFunctionFlagsBase()`/`GetFunctionFlags417()` accessors (read directly from `Class.hpp` and the generated member-layout header, not assumed) — the exact gap that deferred this at Step 4 time. Added `REG_META_FUNCTION_FLAGS`, captured `flags=0x40401` on live v1.0.3, decoded against the real `EFunctionFlags` enum: `FUNC_Final \| FUNC_Native \| FUNC_Private`. Mundane, nothing gating-looking, no v1.0.2 value to diff against. Fourth consecutive negative-but-verified result this session. |
 | Step 5 distance + storage-class | **Accepted diagnostic, closes two more Step 5 bullets.** Storage-class ruled not-applicable directly from the code (`get_storage_module_class()` is the only class the discovery pipeline ever accepts). Distance required finding real camp coordinates: added `CAMP_PROPERTY_DUMP` (positional/kind dump of a camp's own properties, `REG_META_PARAM`'s pattern applied to a `UObject` instead of a `UFunction`), extended to recurse one level into object-reference properties and identify a genuine `/Script/CoreUObject.Vector` struct by real struct-identity comparison. Found it 24 bytes in (double-precision LWC, not the 12-byte single-float layout an initial guess assumed — that misread produced garbage floats until corrected). Real coordinates confirmed an ~8x distance spread between a small and large guild's camp pairs (≈15,645 vs ≈128,535 units), both `RESULT=UNCHANGED`. Distance ruled out as the gating factor. Zero crashes across the whole sequence. |
 | Step 5 guild-size variant | **Accepted diagnostic.** Added `SemanticObservationTargetGuildHex`, a compile-time constant letting `SEMANTIC_OBSERVATION` target a specific guild instead of always the first eligible one in sorted order. Built and tested against the test server's largest (4 camps, 31 chests) and smallest (2 camps) eligible guilds: both `RESULT=UNCHANGED`. Guild size ruled out as the gating factor for problem 2. Getting there took a detour: a `std::ifstream`-based runtime file version of the same idea caused a reproducible `FMallocBinned2` allocator-corruption crash the moment the file was opened, independent of guild targeted or parse success — isolated properly, reverted, and rebuilt on the compile-time approach instead (§6 item 10). |
 | Step 4 signature check | **Resolved, corrected an earlier misread.** Captured `REG_META_PARAM` against a real v1.0.3 server for the first time (this project's own test/production infra turned out to already run the exact `main.so` hash `w00z001` used in their reproduction). Result: one 8-byte object parameter that exactly fills the `parms=8` block. Confirmed against the real SDK header that `GetParmsSize()` returns a byte size, not a parameter count — the "other seven parameter bytes" framing this doc previously carried was wrong. Current v1.0.3 signature is now fully characterized. Closed without a v1.0.2 baseline capture. |
