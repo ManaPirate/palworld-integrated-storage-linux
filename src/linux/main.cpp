@@ -4447,6 +4447,42 @@ namespace
                         );
                     }
                 }
+
+                // Both places in the already-diffed-unchanged native
+                // code that touch OnUpdateAnyItemContainerDelegate
+                // (main implementation tail and the secondary helper,
+                // Step 7/8) load its address and call into what looks
+                // like a broadcast/notify helper -- so if it's the
+                // missing link, the broken part isn't that call code
+                // (proven unchanged), it would have to be whatever's
+                // supposed to be subscribed. Checking whether anything
+                // is subscribed at all first: FMulticastScriptDelegate
+                // is just a TArray<FScriptDelegate> InvocationList, so
+                // this is the exact same TArray-field-read pattern as
+                // ContainerInfos above, at the delegate's own offset
+                // (property index 0, offset=64 from
+                // CAMP_PROPERTY_DUMP).
+                const auto delegate_count =
+                    *reinterpret_cast<
+                        const std::int32_t*
+                    >(base + 0x48);
+
+                const auto delegate_max =
+                    *reinterpret_cast<
+                        const std::int32_t*
+                    >(base + 0x4c);
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "DELEGATE_BINDING_STATE run=%llu "
+                    "name=OnUpdateAnyItemContainer"
+                    "Delegate count=%d max=%d",
+                    static_cast<unsigned long long>(
+                        run
+                    ),
+                    delegate_count,
+                    delegate_max
+                );
             }
         }
 
@@ -14923,6 +14959,77 @@ namespace
                 registration_probe_chest,
                 registration_probe_target_storage
             );
+
+        // Follow-up to DELEGATE_BINDING_STATE (run_read_only_
+        // registration_metadata_probe): is count=0 systemic across
+        // every storage module (consistent with the delegate being a
+        // client-side/UI-only hook, not relevant server-side), or does
+        // it vary? Reuses planned_execution_pairs, already built for
+        // this exact pass -- no new discovery work, just deduplicating
+        // by storage pointer and checking up to 5 distinct instances.
+        // Same raw TArray-Count-field read as DELEGATE_BINDING_STATE
+        // (offset 0x48, since the delegate property itself sits at
+        // offset 0x40 per CAMP_PROPERTY_DUMP).
+        static bool delegate_survey_done{};
+
+        if (!delegate_survey_done && plan_complete)
+        {
+            delegate_survey_done = true;
+
+            std::vector<RC::Unreal::UObject*>
+                surveyed{};
+
+            for (
+                const auto& pair :
+                    planned_execution_pairs
+            )
+            {
+                if (surveyed.size() >= 5)
+                {
+                    break;
+                }
+
+                if (pair.storage == nullptr)
+                {
+                    continue;
+                }
+
+                if (
+                    std::find(
+                        surveyed.begin(),
+                        surveyed.end(),
+                        pair.storage
+                    ) != surveyed.end()
+                )
+                {
+                    continue;
+                }
+
+                surveyed.push_back(pair.storage);
+
+                auto* const survey_base =
+                    reinterpret_cast<std::byte*>(
+                        pair.storage
+                    );
+
+                const auto survey_count =
+                    *reinterpret_cast<
+                        const std::int32_t*
+                    >(survey_base + 0x48);
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "DELEGATE_BINDING_SURVEY "
+                    "guild=%s storage_index=%zu "
+                    "count=%d",
+                    guid_to_hex(
+                        pair.guild
+                    ).data(),
+                    surveyed.size() - 1,
+                    survey_count
+                );
+            }
+        }
 
         run_read_only_transport_metadata_probe(
             registration_plan,
