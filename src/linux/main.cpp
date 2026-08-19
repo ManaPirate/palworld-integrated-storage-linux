@@ -456,6 +456,89 @@ namespace
         return static_cast<std::uint64_t>(rss_kb);
     }
 
+    // Same stdio pattern as read_process_rss_kb() above (fopen/fgets/
+    // fclose), deliberately not std::ifstream -- see
+    // docs/linux-port-status.md §6 item 10 for why plain stdio was kept
+    // and iostream wasn't trusted again without more evidence. Purely
+    // a lookup into this process's own already-open /proc/self/maps;
+    // no engine interaction, no property/object touched.
+    auto resolve_module_for_address(
+        std::uintptr_t address
+    ) -> std::string
+    {
+        std::FILE* const maps_file =
+            std::fopen("/proc/self/maps", "r");
+
+        if (maps_file == nullptr)
+        {
+            return "unknown";
+        }
+
+        char line[512];
+        std::string result = "unmapped";
+
+        while (
+            std::fgets(
+                line,
+                sizeof(line),
+                maps_file
+            ) != nullptr
+        )
+        {
+            unsigned long long range_start{};
+            unsigned long long range_end{};
+
+            if (
+                std::sscanf(
+                    line,
+                    "%llx-%llx",
+                    &range_start,
+                    &range_end
+                ) != 2
+            )
+            {
+                continue;
+            }
+
+            if (
+                address >= range_start &&
+                address < range_end
+            )
+            {
+                const char* slash =
+                    std::strrchr(line, '/');
+
+                if (slash != nullptr)
+                {
+                    std::string path(slash);
+
+                    while (
+                        !path.empty() &&
+                        (
+                            path.back() == '\n' ||
+                            path.back() == '\r'
+                        )
+                    )
+                    {
+                        path.pop_back();
+                    }
+
+                    result = path;
+                }
+                else
+                {
+                    result = "[anonymous]";
+                }
+
+                break;
+            }
+        }
+
+        std::fclose(maps_file);
+
+        return result;
+    }
+
     auto guid_is_zero(const GuildKey& key) noexcept -> bool
     {
         for (const auto byte : key)
@@ -4373,6 +4456,37 @@ namespace
                     run
                 ),
                 function->GetFunctionFlags()
+            );
+
+            // GetReturnProperty()/GetFuncPtr() are both real public
+            // UFunction methods (Class.hpp), not the version-gated
+            // private accessors -- same class of confirmed-safe call as
+            // GetFunctionFlags() above. GetFuncPtr() returns a plain
+            // function pointer; this only reads and logs its address
+            // via /proc/self/maps, never calls or dereferences it.
+            auto* return_property =
+                function->GetReturnProperty();
+
+            const auto func_ptr =
+                reinterpret_cast<std::uintptr_t>(
+                    function->GetFuncPtr()
+                );
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "REG_META_FUNC run=%llu "
+                "has_return_value=%d "
+                "func_ptr=0x%llx func_module=%s",
+                static_cast<unsigned long long>(
+                    run
+                ),
+                return_property != nullptr ? 1 : 0,
+                static_cast<unsigned long long>(
+                    func_ptr
+                ),
+                resolve_module_for_address(
+                    func_ptr
+                ).c_str()
             );
         }
 
