@@ -686,6 +686,29 @@ effect.
   crashes throughout; production untouched. Full method in
   `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §§8-10.
 
+  **New lead, before reaching for a decompiler: `OnRep_ContainerInfos`,
+  not the delegate.** Enumerated every `UFunction` on the storage
+  module class's own chain via reflection (zero new tooling, same
+  `ForEachProperty()`-style pattern already used everywhere else in
+  this file) and found `OnRep_ContainerInfos` among them. `OnRep_`
+  functions are Unreal's replication-notify callbacks — fired on a
+  client only when a replicated property change actually reaches it
+  over the network. That reframes every prior `ContainerInfos` read in
+  this investigation (including the decisive 23-entry capture): all of
+  it only ever read the server's own local copy, never measured
+  whether the change actually replicates. New hypothesis: the
+  server-side write is correct (proven) but isn't reaching clients on
+  v1.0.3, so `OnRep_ContainerInfos` never fires and the
+  "indistinguishable-from-a-real-local-container" mechanism v1.0.0
+  shipped on (§8) never actually reaches the client that needs it.
+  `OnRep_` callbacks never fire on the authority itself, so nothing
+  server-side — not even host/SP — can confirm this; it needs a real
+  client. Prepared a throwaway, read-only Windows client-side UE4SS
+  Lua mod (`tools/client-diagnostics/IntegratedStorageDiag/`) that
+  only logs when the OnRep fires, meant to run against a fully vanilla
+  client. Not yet tested. Full method in
+  `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §11.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -725,6 +748,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Storage class UFunction enumeration | **New lead found, real diagnosis shift.** Before reaching for a decompiler on the delegate lead, tried something cheaper: enumerated every `UFunction` on the storage module class's own chain via reflection (`UStruct::ForEachFunctionInChain()`, same pattern as `ForEachProperty()` already used for `CAMP_PROPERTY_DUMP`) — zero new tooling. Found `OnRep_ContainerInfos` among the nine functions returned. `OnRep_` functions are Unreal's replication-notify callbacks, fired on a client only when a replicated property change actually reaches it over the network — meaning every prior read of `ContainerInfos` (including the decisive 23-entry capture) only ever measured the server's own local copy, not whether it replicates. Also found `OnNotAvailableConcreteModel_ServerInternal` (the unregister counterpart) and confirmed `OnUpdateAnyItemContainerDelegate`'s signature function (`MulticastReturnSelfAndUpdatedContainerDelegate__DelegateSignature`), reinforcing the delegate really is a plain notify hook, not the replication path. New hypothesis: the server-side write is correct but isn't reaching clients over replication on v1.0.3. `OnRep_` callbacks never fire on the authority itself, so nothing server-side (including host/SP) can confirm this — prepared a throwaway, read-only Windows client-side UE4SS Lua mod (`tools/client-diagnostics/IntegratedStorageDiag/`) that just logs when the OnRep fires, for testing against a real vanilla client. Not yet run. Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 11. |
 | Delegate binding check | **Real edge of what's diagnosable with this toolset reached.** Confirmed the code touching `OnUpdateAnyItemContainerDelegate` is inside the already-proven-unchanged real implementation and helper. Read its live binding state (same `TArray`-field-read pattern as `ContainerInfos`): `count=0, max=0`. Surveyed 5 distinct storage modules across 3 guilds: all `count=0`, no variance. Checked the original Windows mod's own source for any reference — none, not conclusive either way. Zero subscribers everywhere is consistent with both "this is a client-only UI hook, normal on a dedicated server" and "something broke subscription on v1.0.3" — can't distinguish without a real decompiler (cross-reference search, not available) or a working v1.0.2 behavioral comparison (blocked by save incompatibility). Zero crashes. |
 | ContainerInfos live-contents capture | **Decisive result: the write path is proven correct.** Read `ContainerInfos`' real `Count`/`Max`/`Data` fields directly, gated on `run>=3` so at least two full registration passes had already run against the exact instance observed. Result: `count=23`, all 10 sampled entries real, distinct, non-zero GUIDs. Confirms `OnAvailableConcreteModel_ServerInternal` genuinely populates real container registrations on v1.0.3, matching its byte-identical-to-v1.0.2 code. The bug is now pinned to something downstream that's supposed to consume `ContainerInfos` — `OnUpdateAnyItemContainerDelegate` is the leading candidate, not yet checked. Zero crashes. Also tried finding the actual reader via the class's own vtable (101 entries captured safely, narrowed to ~19 candidates, four false-positive hits including the class destructor) — hit a genuine tooling wall (`objdump` has no cross-reference database), would need a real decompiler to go further that way. |
 | Native disassembly diff + ContainerInfos | **Real reverse-engineering, decisive negative on the function itself.** Attached `gdb` (via a disposable `--pid=host` container, since neither existing container nor bare Unraid has it) to the live v1.0.3 process and confirmed by breakpoint that the registration thunk and its real implementation are genuinely called with sane live arguments, and that both candidate early-bailout checks inside the implementation pass with real data. Correlated the same function's address in a freshly re-fetched v1.0.2 binary via its literal name string and a `{NamePtr, FuncPtr}` registration-table entry (verified against the already-known v1.0.3 address). Diffed the full implementation plus all three direct helper calls, normalizing address-only differences: empty diff both times — the entire native call chain is byte-identical between versions. Found a new lead via reflection instead: extended `CAMP_PROPERTY_DUMP` to resolve real names (reusing `resolve_transport_item_name()` unchanged), confirming the array this function writes into is named `ContainerInfos`. Zero crashes throughout. Full method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §7. |
