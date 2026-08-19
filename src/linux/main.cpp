@@ -4353,6 +4353,29 @@ namespace
             chest_compatible ? 1 : 0
         );
 
+        // The function's own FunctionFlags bitmask, deliberately
+        // deferred at Step 4 time (docs/V1.0.3_DIAGNOSTIC_PLAN.md) —
+        // the vendored SDK's version-specific accessors
+        // (GetFunctionFlagsBase()/GetFunctionFlags417()) are private
+        // (see generated_include/
+        // MemberVariableLayout_HeaderWrapper_UFunction.hpp), but
+        // UFunction::GetFunctionFlags() itself, declared public in
+        // Class.hpp, is the real non-version-gated wrapper around them
+        // — confirmed against the real pinned SDK header this session,
+        // not guessed.
+        if (function != nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "REG_META_FUNCTION_FLAGS run=%llu "
+                "flags=0x%x",
+                static_cast<unsigned long long>(
+                    run
+                ),
+                function->GetFunctionFlags()
+            );
+        }
+
         if (passed)
         {
             emit_marker(
