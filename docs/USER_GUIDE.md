@@ -143,29 +143,31 @@ performs is re-derived fresh on every discovery pass while it's running.
   see `docs/linux-port-status.md` §9 for what's actually confirmed.
 - **Running Palworld v1.0.3, logs look clean (`FULL_PLAN_REGISTER
   SUMMARY` completing with `blocked=0 exceptions=0`), but guild-wide
-  materials never show up at non-main camps?** As of v1.0.1, controlled
-  testing has confirmed the core mechanism (registration, replication,
-  and the build UI) works correctly end-to-end, including on a client
-  that stays continuously connected rather than just walking between
-  camps. If you're still seeing this, it's likely specific to your
-  server's scale or setup rather than a universal v1.0.3 problem —
-  please attach your `diagnostic_report.txt` (see below) to a
+  materials never show up at non-main camps?** As of v1.0.1, testing
+  has confirmed the core mechanism (registration, replication, and the
+  build UI) works fine end to end, including on a client that stays
+  connected the whole time rather than walking between camps. If
+  you're still seeing this, it's probably down to your server's scale
+  or setup rather than a universal v1.0.3 problem. Attach your
+  `diagnostic_report.txt` (see below) to a
   [GitHub issue](https://github.com/ManaPirate/palworld-integrated-storage-linux/issues)
-  so it can actually be narrowed down. See `docs/linux-port-status.md`
-  §9 for the full investigation history.
+  so it can actually be chased down properly. See
+  `docs/linux-port-status.md` §9 for the full investigation history.
 
 ## Reporting a problem
 
-The mod writes a self-contained diagnostic snapshot to
-`diagnostic_report.txt`, right next to `main.so`
-(`Mods/ModIntegratedStorageCpp/diagnostic_report.txt`), refreshed
-automatically every ~2 minutes for as long as the server runs — no
-setup needed. It covers role/`EngineTick` health, a live
-guild/camp/storage/chest summary, and an egg-incubation section. If
-you hit any problem, **please attach this whole file** to a
-[GitHub issue](https://github.com/ManaPirate/palworld-integrated-storage-linux/issues)
-— it says a lot more than a description alone, and saves a lot of
-back-and-forth.
+The mod writes a diagnostic snapshot to `diagnostic_report.txt`,
+sitting right next to `main.so`
+(`Mods/ModIntegratedStorageCpp/diagnostic_report.txt`). It refreshes
+itself every couple of minutes on its own, no setup needed. Covers
+role/`EngineTick` health, a live guild/camp/storage/chest summary, and
+an egg incubation section. If you hit any problem, attach this whole
+file to a
+[GitHub issue](https://github.com/ManaPirate/palworld-integrated-storage-linux/issues),
+it says a lot more than a description on its own and saves a lot of
+back and forth. If you grabbed this off NexusMods and that's easier
+for you, a post there works too, just attach the same file. GitHub's
+preferred where you can manage it.
 
 ## Attribution
 

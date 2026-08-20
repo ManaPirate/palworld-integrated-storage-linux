@@ -48,15 +48,15 @@ still crash clients on a large guild pool.
 
 ## Reporting a problem
 
-The mod writes a self-contained diagnostic snapshot to
-`diagnostic_report.txt` right next to `main.so` (i.e.
-`Mods/ModIntegratedStorageCpp/diagnostic_report.txt`), refreshed
-automatically every ~2 minutes for as long as the server runs — no
-setup or opt-in needed. It covers role/EngineTick health, a live
-guild/camp/storage/chest summary, and an egg-incubation section. If
-you hit a problem, **please attach this whole file** to a
-[GitHub issue](../../issues) or your bug report — it saves a lot of
-back-and-forth compared to hunting through `UE4SS.log`.
+The mod writes a diagnostic snapshot to `diagnostic_report.txt`, sitting
+right next to `main.so` (`Mods/ModIntegratedStorageCpp/diagnostic_report.txt`).
+It refreshes itself every couple of minutes on its own, no setup needed.
+Covers role/EngineTick health, a live guild/camp/storage/chest summary,
+and an egg incubation section. If you hit a problem, attach this whole
+file to a [GitHub issue](../../issues), it saves a lot of back and forth
+compared to us hunting through `UE4SS.log`. If you picked this mod up
+from NexusMods and that's easier for you, a post there works too, just
+attach the same file. GitHub's preferred where you can manage it.
 
 ## Engineering record
 
