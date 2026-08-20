@@ -15947,20 +15947,15 @@ namespace
                 STR("IntegratedStorageCpp");
 
             ModVersion =
-                STR("0.1.0-linux-stage4d.9f-leak-growth-probe");
+                STR("1.0.1");
 
             ModDescription =
                 STR(
-                    "Linux dedicated-server read-only transport "
-                    "metadata and bounded foreign-pool probe, plus "
-                    "opt-in isolated FName::ToString() diagnostics: "
-                    "GetFName()-obtained, memcpy'd/pool-sourced, "
-                    "pool-sourced-without-RC::to_string()-conversion, "
-                    "pool-sourced-with-intentionally-leaked-result, "
-                    "pool-sourced-leaked-result-with-chardata-read, and "
-                    "a repeating leak-and-read growth probe that leaks "
-                    "one ToString() result per engine tick and reports "
-                    "process VmRSS over time."
+                    "Native Linux dedicated-server port: "
+                    "server-authoritative shared storage across "
+                    "every camp your guild owns, no client-side mod "
+                    "required. Writes a self-contained diagnostic "
+                    "report file every ~2 minutes for bug reports."
                 );
 
             ModAuthors =
