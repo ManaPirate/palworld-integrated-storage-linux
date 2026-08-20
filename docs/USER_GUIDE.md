@@ -111,8 +111,8 @@ mistake them for something broken:
   reproduced since despite deliberate attempts, and server-side logs
   stayed completely healthy throughout the one time it happened, so it
   looks like a rare native client-side hiccup rather than a server bug.
-  If it ever happens to you, fast-travel (or otherwise visit) a different
-  base and return to the affected one.
+  If it ever happens to you, **fast-travel to a different base and back**.
+  That's the fix that's actually worked.
 
 ## Uninstalling
 
