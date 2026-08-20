@@ -26,9 +26,11 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstddef>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <new>
 #include <unordered_map>
@@ -104,6 +106,8 @@ namespace
 
     constexpr auto WorldProbeInterval = std::chrono::seconds{1};
     constexpr auto DiscoveryInterval = std::chrono::seconds{8};
+    constexpr auto DiagnosticReportInterval =
+        std::chrono::seconds{120};
 
     struct RawTArray
     {
@@ -341,6 +345,7 @@ namespace
 
     Clock::time_point g_last_world_probe{};
     Clock::time_point g_last_discovery{};
+    Clock::time_point g_last_diagnostic_report{};
 
     std::uint64_t g_discovery_runs{};
 
@@ -454,6 +459,83 @@ namespace
         std::fclose(status_file);
 
         return static_cast<std::uint64_t>(rss_kb);
+    }
+
+    // Same stdio pattern as read_process_rss_kb() (fopen/fgets/fclose),
+    // deliberately not std::ifstream -- see docs/linux-port-status.md
+    // §6 item 10. Finds this exact module's own loaded path by
+    // scanning /proc/self/maps for the mapping containing
+    // "/dlls/main.so", then strips that known suffix to get the mod's
+    // own root directory -- so the diagnostic report always lands next
+    // to the mod, regardless of how the server was launched or what
+    // its working directory is. Pure self-introspection, no engine
+    // interaction.
+    auto resolve_own_mod_directory() -> std::string
+    {
+        std::FILE* const maps_file =
+            std::fopen("/proc/self/maps", "r");
+
+        if (maps_file == nullptr)
+        {
+            return "";
+        }
+
+        char line[512];
+        std::string result;
+
+        while (
+            std::fgets(
+                line,
+                sizeof(line),
+                maps_file
+            ) != nullptr
+        )
+        {
+            if (
+                std::strstr(
+                    line,
+                    "/dlls/main.so"
+                ) == nullptr
+            )
+            {
+                continue;
+            }
+
+            const char* first_slash =
+                std::strchr(line, '/');
+
+            if (first_slash == nullptr)
+            {
+                continue;
+            }
+
+            std::string path(first_slash);
+
+            while (
+                !path.empty() &&
+                (
+                    path.back() == '\n' ||
+                    path.back() == '\r'
+                )
+            )
+            {
+                path.pop_back();
+            }
+
+            const auto suffix_position =
+                path.rfind("/dlls/main.so");
+
+            if (suffix_position != std::string::npos)
+            {
+                result = path.substr(0, suffix_position);
+            }
+
+            break;
+        }
+
+        std::fclose(maps_file);
+
+        return result;
     }
 
     // Same stdio pattern as read_process_rss_kb() above (fopen/fgets/
@@ -1798,6 +1880,381 @@ namespace
             new std::vector<RC::Unreal::UObject*>{};
 
         return *buffer;
+    }
+
+    auto get_egg_hatching_discovery_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        // Same process-lifetime pattern as get_camp_discovery_buffer()
+        // above -- FindAllOf grows this inside libUE4SS.so.
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
+    auto get_egg_multi_hatching_discovery_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
+    // One-shot, read-only: dumps real property layouts for whatever
+    // egg-incubation classes actually exist in the world, found via
+    // real class names read out of the game binary's own debug string
+    // table (UPalMapObjectHatchingEggModel /
+    // UPalMapObjectMultiHatchingEggModel), not guessed. Answers the
+    // egg-incubator-freeze report (w00z001, NexusMods mod 5044) at the
+    // data level before any correlation work against this mod's own
+    // EngineTick-driven reconcile timing -- reuses
+    // emit_camp_property_dump() unchanged, the same reflection walk
+    // already proven safe for camps and storage modules.
+    auto run_egg_hatching_model_probe() -> void
+    {
+        // Per-class latches, not a single top-level one-shot: keeps
+        // retrying every discovery pass (cheap -- the same FindAllOf
+        // call already made every pass for camps/chests) until a real
+        // egg actually exists to dump, rather than needing the operator
+        // to restart the server after placing one. Only logs/dumps
+        // once real data appears, so an empty world doesn't spam
+        // found=0 every ~8s.
+        static bool single_reported{};
+        static bool multi_reported{};
+
+        if (!single_reported)
+        {
+            auto& single = get_egg_hatching_discovery_buffer();
+            single.clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalMapObjectHatchingEggModel"),
+                single
+            );
+
+            if (!single.empty())
+            {
+                single_reported = true;
+
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "EGG_MODEL_DISCOVERY "
+                    "class=HatchingEggModel found=%zu",
+                    single.size()
+                );
+
+                std::size_t single_dumped{};
+
+                for (auto* egg : single)
+                {
+                    if (egg == nullptr || single_dumped >= 3)
+                    {
+                        continue;
+                    }
+
+                    ++single_dumped;
+
+                    emit_camp_property_dump(
+                        "egg_hatching_model",
+                        GuildKey{},
+                        egg
+                    );
+                }
+            }
+        }
+
+        if (multi_reported)
+        {
+            return;
+        }
+
+        auto& multi = get_egg_multi_hatching_discovery_buffer();
+        multi.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalMapObjectMultiHatchingEggModel"),
+            multi
+        );
+
+        if (multi.empty())
+        {
+            return;
+        }
+
+        multi_reported = true;
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "EGG_MODEL_DISCOVERY "
+            "class=MultiHatchingEggModel found=%zu",
+            multi.size()
+        );
+
+        std::size_t multi_dumped{};
+
+        for (auto* egg : multi)
+        {
+            if (egg == nullptr || multi_dumped >= 3)
+            {
+                continue;
+            }
+
+            ++multi_dumped;
+
+            emit_camp_property_dump(
+                "egg_multi_hatching_model",
+                GuildKey{},
+                egg
+            );
+        }
+    }
+
+    // Wide-scope, self-contained diagnostic snapshot for bug reports:
+    // "drop this file in" instead of hunting through UE4SS.log.
+    // Overwrites the same file every call (fresh snapshot, not an
+    // unbounded append log) at <mod_root>/diagnostic_report.txt, found
+    // via resolve_own_mod_directory() so it lands in the right place
+    // regardless of launch method. Plain C stdio throughout (fopen/
+    // fprintf/fclose), matching every other file-I/O call in this file
+    // -- deliberately not std::ofstream, same reasoning as the
+    // std::ifstream crash lesson (docs/linux-port-status.md §6 item
+    // 10): unproven iostream paths aren't trusted here without
+    // evidence, plain stdio already is. Does its own fresh discovery
+    // pass rather than reusing run_read_only_discovery()'s internal
+    // state, so it has no dependency on when/whether that pass has
+    // run, and reuses the exact same safe accessors that pass already
+    // trusts (copy_guild_key, find_storage_module, class_is).
+    auto write_diagnostic_report() -> void
+    {
+        const auto mod_directory =
+            resolve_own_mod_directory();
+
+        if (mod_directory.empty())
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "DIAGNOSTIC_REPORT RESULT=NO_MOD_DIRECTORY"
+            );
+
+            return;
+        }
+
+        const auto report_path =
+            mod_directory + "/diagnostic_report.txt";
+
+        std::FILE* const report_file =
+            std::fopen(report_path.c_str(), "w");
+
+        if (report_file == nullptr)
+        {
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "DIAGNOSTIC_REPORT RESULT=OPEN_FAILED "
+                "path=\"%s\"",
+                report_path.c_str()
+            );
+
+            return;
+        }
+
+        const auto now_time =
+            std::time(nullptr);
+
+        char time_buffer[64] = "unknown";
+
+        std::tm time_parts{};
+
+        if (gmtime_r(&now_time, &time_parts) != nullptr)
+        {
+            std::strftime(
+                time_buffer,
+                sizeof(time_buffer),
+                "%Y-%m-%d %H:%M:%S UTC",
+                &time_parts
+            );
+        }
+
+        std::fprintf(
+            report_file,
+            "Integrated Storage Linux -- diagnostic report\n"
+            "Generated: %s\n"
+            "Attach this whole file to a GitHub issue or bug "
+            "report. Regenerated fresh every ~2 minutes while the "
+            "server runs, so it always reflects current state, not "
+            "history.\n\n",
+            time_buffer
+        );
+
+        std::fprintf(
+            report_file,
+            "== Role ==\n"
+            "is_dedicated=%d is_server=%d\n"
+            "engine_tick_hook_registered=%d\n"
+            "discovery_reconcile_passes=%llu\n\n",
+            g_is_dedicated.load(std::memory_order_acquire),
+            g_is_server.load(std::memory_order_acquire),
+            g_engine_tick_callback_id !=
+                    RC::Unreal::Hook::ERROR_ID ?
+                1 : 0,
+            static_cast<unsigned long long>(
+                g_chest_association_runs.load(
+                    std::memory_order_acquire
+                )
+            )
+        );
+
+        auto& camps = get_camp_discovery_buffer();
+        camps.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalBaseCampModel"),
+            camps
+        );
+
+        std::unordered_map<
+            GuildKey,
+            GuildDiscovery,
+            GuildKeyHash
+        > guilds{};
+
+        std::size_t valid_camps{};
+
+        for (auto* camp : camps)
+        {
+            if (camp == nullptr)
+            {
+                continue;
+            }
+
+            GuildKey guild_key{};
+
+            if (
+                !copy_guild_key(camp, guild_key) ||
+                guid_is_zero(guild_key)
+            )
+            {
+                continue;
+            }
+
+            ++valid_camps;
+
+            auto& guild = guilds[guild_key];
+            ++guild.camp_count;
+
+            auto* storage = find_storage_module(camp);
+
+            if (storage != nullptr)
+            {
+                guild.storage_modules.insert(storage);
+            }
+        }
+
+        auto& chests = get_chest_discovery_buffer();
+        chests.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalMapObjectItemChestModel"),
+            chests
+        );
+
+        std::fprintf(
+            report_file,
+            "== World summary ==\n"
+            "camps_found=%zu valid_camps=%zu guilds=%zu "
+            "chests_found=%zu\n\n",
+            camps.size(),
+            valid_camps,
+            guilds.size(),
+            chests.size()
+        );
+
+        std::fprintf(
+            report_file,
+            "== Guilds (id, camps, storage modules) ==\n"
+        );
+
+        for (const auto& [guild_key, guild] : guilds)
+        {
+            std::fprintf(
+                report_file,
+                "%s camps=%zu storages=%zu\n",
+                guid_to_hex(guild_key).data(),
+                guild.camp_count,
+                guild.storage_modules.size()
+            );
+        }
+
+        auto& single_eggs =
+            get_egg_hatching_discovery_buffer();
+
+        single_eggs.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalMapObjectHatchingEggModel"),
+            single_eggs
+        );
+
+        auto& multi_eggs =
+            get_egg_multi_hatching_discovery_buffer();
+
+        multi_eggs.clear();
+
+        RC::Unreal::UObjectGlobals::FindAllOf(
+            STR("PalMapObjectMultiHatchingEggModel"),
+            multi_eggs
+        );
+
+        std::fprintf(
+            report_file,
+            "\n== Egg incubation (problem 3 lead) ==\n"
+            "hatching_egg_models=%zu "
+            "multi_hatching_egg_models=%zu\n",
+            single_eggs.size(),
+            multi_eggs.size()
+        );
+
+        std::size_t temperature_samples{};
+
+        for (auto* egg : single_eggs)
+        {
+            if (egg == nullptr || temperature_samples >= 10)
+            {
+                continue;
+            }
+
+            const auto* temperature_diff_ptr =
+                egg->GetValuePtrByPropertyNameInChain(
+                    STR("CurrentPalEggTemperatureDiff")
+                );
+
+            if (temperature_diff_ptr == nullptr)
+            {
+                continue;
+            }
+
+            ++temperature_samples;
+
+            std::fprintf(
+                report_file,
+                "  egg[%zu] CurrentPalEggTemperatureDiff=%.3f\n",
+                temperature_samples,
+                static_cast<double>(
+                    *reinterpret_cast<const float*>(
+                        temperature_diff_ptr
+                    )
+                )
+            );
+        }
+
+        std::fclose(report_file);
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "DIAGNOSTIC_REPORT RESULT=WRITTEN path=\"%s\"",
+            report_path.c_str()
+        );
     }
 
     auto run_read_only_discovery() -> void
@@ -15766,6 +16223,19 @@ namespace
                 g_last_discovery = now;
                 run_read_only_discovery();
                 request_read_only_chest_association();
+                run_egg_hatching_model_probe();
+            }
+
+            if (
+                timepoint_is_empty(
+                    g_last_diagnostic_report
+                ) ||
+                now - g_last_diagnostic_report >=
+                    DiagnosticReportInterval
+            )
+            {
+                g_last_diagnostic_report = now;
+                write_diagnostic_report();
             }
         }
     };
