@@ -46,6 +46,18 @@ nothing on the client. Don't install any client-side Integrated Storage
 mod, it's unnecessary and the unpatched Steam Workshop/NexusMods build can
 still crash clients on a large guild pool.
 
+## Reporting a problem
+
+The mod writes a self-contained diagnostic snapshot to
+`diagnostic_report.txt` right next to `main.so` (i.e.
+`Mods/ModIntegratedStorageCpp/diagnostic_report.txt`), refreshed
+automatically every ~2 minutes for as long as the server runs — no
+setup or opt-in needed. It covers role/EngineTick health, a live
+guild/camp/storage/chest summary, and an egg-incubation section. If
+you hit a problem, **please attach this whole file** to a
+[GitHub issue](../../issues) or your bug report — it saves a lot of
+back-and-forth compared to hunting through `UE4SS.log`.
+
 ## Engineering record
 
 Linux port engineering documentation lives in two files:
