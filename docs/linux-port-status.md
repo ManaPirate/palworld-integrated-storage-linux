@@ -710,14 +710,14 @@ effect.
   `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §11.
 
   **Step 12 — the pivotal result of the whole investigation: ran the
-  real test, mechanism confirmed working end-to-end.** The operator
-  ran the diagnostic mod against their own real guild: walked between
+  real test, mechanism confirmed working end-to-end.** I ran the
+  diagnostic mod against my own real guild: walked between
   a pre-existing camp ("Camp A") and a freshly-built second camp under
   the same guild ("Camp B") repeatedly over ~40 minutes.
   `OnRep_ContainerInfos` fired **8 times**, clearly tracking the real
   camp visits, not just once at connect — falsifying the Step 11
   hypothesis in its strong form. Then, with empty personal inventory
-  and empty Camp B storage, the operator **actually built** at Camp B
+  and empty Camp B storage, I **actually built** at Camp B
   using materials sitting only in Camp A — a real placed build, not
   just a UI count.
 
@@ -741,6 +741,171 @@ effect.
   something specific to those reporters' own setups. The mechanism
   itself is no longer the suspect. Zero crashes throughout. Full
   method in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` §12.
+
+  **Step 13, 25 Aug 2026 — w00z001 retested at real scale (58 pairs),
+  scale ruled out further, and the real bug found: client-side live
+  refresh, not registration.** w00z001 ran the v1.0.1 diagnostic tool
+  against their real 3-camp/29-chest/58-pair guild. Core symptom
+  confirmed at scale: `FULL_PLAN_REGISTER SUMMARY` completes cleanly
+  (58/58, zero exceptions), `SEMANTIC_OBSERVATION RESULT=UNCHANGED`.
+  They flagged `GUILD_CHEST_MODULE`/`SLOT_LAYOUT`/`QUERY_ASSEMBLY`
+  (all `INCOMPLETE`) as the likely blocker — traced these in the
+  source first rather than trusting that read: `Stage 4d.5b` and
+  earlier (9 Aug, before this investigation even started), leftover
+  diagnostics probing Palworld's separate Guild Chest object, an
+  alternate mechanism abandoned before the live registration approach
+  was built. Independently reproduced the identical `INCOMPLETE`
+  results, same field values, against our own guild data on the
+  current build — confirms it's universal and unrelated to problem 2,
+  not new evidence. Safe to disregard going forward.
+
+  Pushed our own test guild from 7 to 82 chests (2 camps, so
+  `pairs` scales directly with chest count) specifically to retest at
+  scale. Server-side stayed completely clean throughout —
+  `FULL_PLAN_REGISTER SUMMARY planned=353 attempted=353 completed=353
+  blocked=0 exceptions=0` at `pairs=82`, well past w00z001's 58.
+  Further confirms registration was never the weak point at any scale
+  tested.
+
+  Then a real, live build session at that scale (~30 chests built
+  using cross-camp materials) surfaced the actual bug directly: the
+  build menu's displayed material count doesn't update live as
+  cross-camp materials get consumed — it only refreshes on the next
+  camp transition. Confirmed the underlying consumption itself is
+  correct (materials really were deducted at the source camp; the
+  eventual "insufficient materials" error was accurate, not a false
+  rejection) — this is a UI/replication staleness bug, not a
+  materials-availability bug. Isolated cleanly with a same-camp
+  control test: local materials update instantly in the build menu,
+  cross-camp materials don't, on the same guild, same session.
+
+  This reframes `SEMANTIC_OBSERVATION RESULT=UNCHANGED` itself:
+  proven **not** reliable evidence of a functional bug on its own. It
+  read `UNCHANGED` on this exact guild moments before a live test
+  proved cross-camp building works correctly end-to-end. The
+  diagnostic is a passive read of the destination storage's own
+  memory with nobody connected; the real mechanism appears to compute
+  cross-camp availability from whatever's currently replicated to the
+  client, which only refreshes on specific triggers (camp
+  entry/exit), not continuously. Every `UNCHANGED` result this
+  investigation has ever produced — Step 5's two guilds, this
+  session's four, w00z001's — needs to be read in that light; it
+  rules out nothing about whether cross-camp pooling actually works
+  for a live player. w00z001's own report is not explained away by
+  this, though — their live client test (build menu never showing
+  cross-camp materials at all) is still a real, unexplained failure,
+  a different shape than the delayed-refresh staleness found here.
+
+  **Root cause theory and an EXPERIMENTAL fix, not yet proven safe
+  for production.** A client only gets continuous replication updates
+  from actors Unreal considers relevant to it — normally meaning
+  physically nearby. A cross-camp-registered chest is very likely
+  never relevant to a client who isn't standing near it, so its
+  item-slot data doesn't propagate between relevance-triggering
+  events. Checked for a targeted, per-connection fix first:
+  `IsNetRelevantFor` (the real mechanism) has zero `UFUNCTION`
+  presence in either `Engine.hpp` or `Pal.hpp` — a pure native
+  virtual, unreachable through this project's reflection-based
+  tooling at all without vtable-patching the virtual itself and
+  reimplementing the engine's whole relevancy decision natively, a
+  categorically riskier class of hook than anything else in this
+  project and not attempted. The only reachable lever is the blunt
+  global `AActor::bAlwaysRelevant`.
+
+  Implementation (`apply_always_relevant_to_chest_actors`, gated
+  behind `EnableAlwaysRelevantChestActorExperiment = true`, clearly
+  marked EXPERIMENTAL in comments): for every uniquely registered
+  chest, resolve its owning placed-in-world actor and set
+  `bAlwaysRelevant = true` via `FBoolProperty::
+  SetPropertyValueInContainer` (confirmed in the real vendored SDK) —
+  `bAlwaysRelevant` and `bOnlyRelevantToOwner` share a byte offset in
+  the reflection dump, packed bitfields, so a raw byte write would
+  have corrupted one while setting the other. Reaching the owning
+  actor took two attempts: `GetTypedOuter()` (call-dispatch-free, the
+  safer option) resolved 0 of 247 chests — Outer turned out not to be
+  the ownership path here. Fell back to calling the real
+  `UPalMapObjectConcreteModelBase::GetActor()` accessor via
+  `ProcessEvent`, reusing the exact buffer-construction pattern
+  already proven safe in this file for `GetItemContainerModule()`
+  (`std::array<std::byte, 8>`, same parms-size guard, same
+  memcpy-out) — not a new calling convention. Deployed to the test
+  server: full resolution (`actors_resolved` and `properties_found`
+  both exactly matching `chests_seen`), idempotent on every
+  subsequent pass, zero crashes, survived a clean restart. **Confirmed
+  working on a real live test**: all materials at Camp A, built ~8
+  chests at Camp B using them, UI updated instantly throughout —
+  matching how local materials already behaved. No staleness.
+
+  Also built a join-triggered variant, scoped to just the connecting
+  player's own guild rather than shortening the global 8s reconcile
+  interval for everyone (my own idea, worth the extra
+  targeting) — closes the one remaining gap (a chest built moments
+  before someone joins, not yet through a periodic pass) without
+  adding cost for guilds nobody's actively joining into. Note:
+  `bAlwaysRelevant` persists on the actor once set, so this does
+  *not* help a returning player see anything the periodic pass hadn't
+  already caught before they left — it only shrinks the
+  brand-new-chest timing window. Two native join-event hooks tried
+  first, `/Script/Engine.GameModeBase:K2_PostLogin` and
+  `/Script/Pal.PalPlayerState:ReceiveNotifyLoginComplete` — both
+  registered cleanly (real function names) but neither ever fired on
+  repeated real connect/disconnect tests; removed rather than left as
+  dead registrations. Replaced with polling: every 1s, `FindAllOf
+  ("PalPlayerState")` diffed against a seen-set, same pattern already
+  proven throughout this file for chests/camps. Caught a real bug of
+  our own making before it shipped: the first version marked a
+  `PlayerState` "seen" regardless of outcome, but `GuildBelongTo`
+  empirically isn't populated until **~20 seconds** after a
+  `PlayerState` first exists — the single-shot version would have
+  permanently missed every player. Fixed to only mark done on
+  success, retrying every poll otherwise; live-tested through the
+  full sequence (~20 `GUILDBELONGTO_NULL` retries, then a clean
+  scoped pass). Also caught and fixed a real cross-DLL-allocator
+  hazard while building this, before it ever ran: `FindAllOf`
+  allocates inside `libUE4SS.so`, so the discovery buffer had to be a
+  static, process-lifetime heap allocation (matching
+  `get_chest_discovery_buffer()`'s own existing pattern), never a
+  local/stack vector `main.so`'s own allocator would try to destroy.
+
+  **Status: pushed to
+  [`experimental/cross-camp-always-relevant`](https://github.com/ManaPirate/palworld-integrated-storage-linux/tree/experimental/cross-camp-always-relevant)
+  (commit `51440de`), deliberately not `main`.** Both pieces confirmed
+  working on the isolated test server first. Deployed to production
+  after a backup (my own call, wanted real data): clean
+  startup, `FULL_PLAN_REGISTER` completing (283/283) against the real
+  save, zero crashes. First check showed every one of production's
+  ~201 chests already `bAlwaysRelevant=true` before anything ran,
+  which looked like a real mystery — turned out to be a timing
+  artifact, not a production-specific default: ~80s had elapsed
+  before the log was checked, enough for ~10 reconcile passes to
+  already flip everything, idempotently. Confirmed with a genuinely
+  fresh-boot capture on the test server (before the periodic pass had
+  run even once): all 257 chests across all 16 real chest/storage
+  Blueprint classes start `bAlwaysRelevant=false`, no per-class
+  variance. The fix is doing exactly what it's supposed to.
+
+  **A second crash found and fixed while investigating that.** The
+  read-only diagnostic added to check this
+  (`investigate_chest_actor_relevancy_default`) originally called
+  `actor_class->GetFullName()` to log class names — that returns the
+  SDK's wide `StringType` by value across the `main.so`/`libUE4SS.so`
+  boundary, and letting its destructor run normally reproduced the
+  exact `FMallocBinned2` canary-mismatch crash class already
+  documented elsewhere in this file (§5's whole reason for existing).
+  Treating "this is a real documented API" as equivalent to "its
+  return value is safe to manage normally" was the mistake — this
+  file already taught that lesson once. Fixed by reusing `GetFName()`
+  (a plain 8-byte POD, no destructor concern) through the existing
+  `resolve_transport_item_name()` cache instead of improvising a new
+  string-handling path. Zero crashes since. Even a genuinely
+  experimental branch built carefully all session isn't immune to
+  this hazard class — worth remembering.
+
+  Still not deployed to production for the long term without a
+  separate conversation about the tradeoff: even proven correct,
+  `bAlwaysRelevant` makes every cross-registered camp always-relevant
+  to *every* connected client, not just guild members, a real
+  bandwidth cost on a server with several active guilds.
 
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
@@ -781,8 +946,9 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
-| Value-change-while-relevant test | **Closes the replication question entirely.** The one remaining untested replication scenario from Step 12 (a client walking toward newly-relevant camps): does a genuine value change replicate to a client who's already relevant/stationary? Identified the operator's real guild live from server data (camp count went 1→2, no need to ask), built a throwaway unregister-then-natural-re-add test with a 5-minute wall-clock grace window (first ungated attempt fired within 45s, too fast to coordinate). Fired on schedule against a client that had been connected and parked for 3+ minutes: the removal replicated in 0.4s, the natural re-add replicated correctly 16s later when the exclusion window expired. Combined with Step 12, both replication scenarios this investigation could construct now have positive, verified evidence. Registration, replication, and the build UI are proven correct in every configuration tested. What's failing for the original reporters isn't explained by anything found here — remaining candidates are scale or reporter-specific setup. Removed the test code afterward (confirmed `main.so` hash identical to the pre-test baseline). Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 13. |
-| Real end-to-end build test | **Pivotal result of the whole investigation.** Ran the `IntegratedStorageDiag` client mod against the operator's real guild: walked between a pre-existing camp and a freshly-built second camp repeatedly over ~40 minutes. `OnRep_ContainerInfos` fired 8 times, clearly tracking real camp visits, not just once at connect — falsifies the replication-broken hypothesis. With empty personal inventory and empty destination-camp storage, the operator then **actually built** using materials from the other camp — a real placed build, not just a UI count. First genuine end-to-end test in the investigation: every earlier "reproduces" result (Steps 4–11) was a read-only reflection diagnostic against server state, never a live build attempt. Registration, replication, and the build UI are now confirmed correct together under these conditions. Doesn't mean the original reports were wrong — means the mechanism itself is no longer the suspect, and finding what's actually failing for the original reporters needs a different axis (scale, timing, or reporter-specific setup). Removed the throwaway guild-coordinate-dump helper used to locate a test guild, superseded once the operator built their own second camp. Zero crashes. |
+| Step 13: scale ruled out further, real bug found, EXPERIMENTAL fix built | **See §9 problem 2 for full detail.** w00z001 retested at real scale (58 pairs) — registration still clean, `SEMANTIC_OBSERVATION` still `UNCHANGED`. Their `GUILD_CHEST_MODULE`/`SLOT_LAYOUT`/`QUERY_ASSEMBLY` INCOMPLETE findings confirmed a red herring (old abandoned Stage 4d.5b diagnostics, reproduced identically on our own infra). Pushed our own guild to 82 pairs, still clean server-side. A real live build session at scale found the actual bug: cross-camp materials don't live-update in the build menu (same-camp materials do), though the underlying consumption is correct — reframes every `SEMANTIC_OBSERVATION UNCHANGED` result to date as not reliable evidence of a functional bug. Built and live-confirmed an EXPERIMENTAL fix (`bAlwaysRelevant` on registered chests' owning actors, plus a join-triggered scoped variant using polling after two native join hooks turned out to never fire) — not yet committed, test-server only, production bandwidth tradeoff not yet discussed. |
+| Value-change-while-relevant test | **Closes the replication question entirely.** The one remaining untested replication scenario from Step 12 (a client walking toward newly-relevant camps): does a genuine value change replicate to a client who's already relevant/stationary? Identified my real guild live from server data (camp count went 1→2, no need to ask), built a throwaway unregister-then-natural-re-add test with a 5-minute wall-clock grace window (first ungated attempt fired within 45s, too fast to coordinate). Fired on schedule against a client that had been connected and parked for 3+ minutes: the removal replicated in 0.4s, the natural re-add replicated correctly 16s later when the exclusion window expired. Combined with Step 12, both replication scenarios this investigation could construct now have positive, verified evidence. Registration, replication, and the build UI are proven correct in every configuration tested. What's failing for the original reporters isn't explained by anything found here — remaining candidates are scale or reporter-specific setup. Removed the test code afterward (confirmed `main.so` hash identical to the pre-test baseline). Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 13. |
+| Real end-to-end build test | **Pivotal result of the whole investigation.** Ran the `IntegratedStorageDiag` client mod against my real guild: walked between a pre-existing camp and a freshly-built second camp repeatedly over ~40 minutes. `OnRep_ContainerInfos` fired 8 times, clearly tracking real camp visits, not just once at connect — falsifies the replication-broken hypothesis. With empty personal inventory and empty destination-camp storage, I then **actually built** using materials from the other camp — a real placed build, not just a UI count. First genuine end-to-end test in the investigation: every earlier "reproduces" result (Steps 4–11) was a read-only reflection diagnostic against server state, never a live build attempt. Registration, replication, and the build UI are now confirmed correct together under these conditions. Doesn't mean the original reports were wrong — means the mechanism itself is no longer the suspect, and finding what's actually failing for the original reporters needs a different axis (scale, timing, or reporter-specific setup). Removed the throwaway guild-coordinate-dump helper used to locate a test guild, superseded once I built my own second camp. Zero crashes. |
 | Storage class UFunction enumeration | **New lead found, real diagnosis shift.** Before reaching for a decompiler on the delegate lead, tried something cheaper: enumerated every `UFunction` on the storage module class's own chain via reflection (`UStruct::ForEachFunctionInChain()`, same pattern as `ForEachProperty()` already used for `CAMP_PROPERTY_DUMP`) — zero new tooling. Found `OnRep_ContainerInfos` among the nine functions returned. `OnRep_` functions are Unreal's replication-notify callbacks, fired on a client only when a replicated property change actually reaches it over the network — meaning every prior read of `ContainerInfos` (including the decisive 23-entry capture) only ever measured the server's own local copy, not whether it replicates. Also found `OnNotAvailableConcreteModel_ServerInternal` (the unregister counterpart) and confirmed `OnUpdateAnyItemContainerDelegate`'s signature function (`MulticastReturnSelfAndUpdatedContainerDelegate__DelegateSignature`), reinforcing the delegate really is a plain notify hook, not the replication path. New hypothesis: the server-side write is correct but isn't reaching clients over replication on v1.0.3. `OnRep_` callbacks never fire on the authority itself, so nothing server-side (including host/SP) can confirm this — prepared a throwaway, read-only Windows client-side UE4SS Lua mod (`tools/client-diagnostics/IntegratedStorageDiag/`) that just logs when the OnRep fires, for testing against a real vanilla client. Not yet run. Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 11. |
 | Delegate binding check | **Real edge of what's diagnosable with this toolset reached.** Confirmed the code touching `OnUpdateAnyItemContainerDelegate` is inside the already-proven-unchanged real implementation and helper. Read its live binding state (same `TArray`-field-read pattern as `ContainerInfos`): `count=0, max=0`. Surveyed 5 distinct storage modules across 3 guilds: all `count=0`, no variance. Checked the original Windows mod's own source for any reference — none, not conclusive either way. Zero subscribers everywhere is consistent with both "this is a client-only UI hook, normal on a dedicated server" and "something broke subscription on v1.0.3" — can't distinguish without a real decompiler (cross-reference search, not available) or a working v1.0.2 behavioral comparison (blocked by save incompatibility). Zero crashes. |
 | ContainerInfos live-contents capture | **Decisive result: the write path is proven correct.** Read `ContainerInfos`' real `Count`/`Max`/`Data` fields directly, gated on `run>=3` so at least two full registration passes had already run against the exact instance observed. Result: `count=23`, all 10 sampled entries real, distinct, non-zero GUIDs. Confirms `OnAvailableConcreteModel_ServerInternal` genuinely populates real container registrations on v1.0.3, matching its byte-identical-to-v1.0.2 code. The bug is now pinned to something downstream that's supposed to consume `ContainerInfos` — `OnUpdateAnyItemContainerDelegate` is the leading candidate, not yet checked. Zero crashes. Also tried finding the actual reader via the class's own vtable (101 entries captured safely, narrowed to ~19 candidates, four false-positive hits including the class destructor) — hit a genuine tooling wall (`objdump` has no cross-reference database), would need a real decompiler to go further that way. |

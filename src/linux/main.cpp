@@ -106,6 +106,7 @@ namespace
 
     constexpr auto WorldProbeInterval = std::chrono::seconds{1};
     constexpr auto DiscoveryInterval = std::chrono::seconds{8};
+    constexpr auto PlayerJoinPollInterval = std::chrono::seconds{1};
     constexpr auto DiagnosticReportInterval =
         std::chrono::seconds{120};
 
@@ -346,6 +347,11 @@ namespace
     Clock::time_point g_last_world_probe{};
     Clock::time_point g_last_discovery{};
     Clock::time_point g_last_diagnostic_report{};
+    Clock::time_point g_last_player_join_poll{};
+
+    std::unordered_set<
+        RC::Unreal::UObject*
+    > g_seen_player_states{};
 
     std::uint64_t g_discovery_runs{};
 
@@ -1772,6 +1778,20 @@ namespace
         // As with the Stage-4a camp buffer, retain it for process
         // lifetime so main.so never destroys storage allocated while
         // libUE4SS.so was operating on the vector.
+        static auto* buffer =
+            new std::vector<RC::Unreal::UObject*>{};
+
+        return *buffer;
+    }
+
+    auto get_player_state_discovery_buffer()
+        -> std::vector<RC::Unreal::UObject*>&
+    {
+        // Same cross-DLL-allocator reasoning as
+        // get_chest_discovery_buffer() immediately above -- FindAllOf
+        // allocates this vector's storage inside libUE4SS.so, so it
+        // must not be a main.so-local/stack vector that main.so's own
+        // allocator would try to destroy.
         static auto* buffer =
             new std::vector<RC::Unreal::UObject*>{};
 
@@ -12843,6 +12863,890 @@ namespace
 
 
 
+    // EXPERIMENTAL -- 25 Aug 2026 -- not proven safe, test-server only.
+    //
+    // Investigating a real live-tested symptom: a client's build menu at
+    // one camp doesn't live-update materials consumed from a
+    // cross-registered chest at a different camp, even though the
+    // consumption genuinely happens server-side (confirmed by direct
+    // live test) -- it only refreshes on the next camp transition. The
+    // client's OWN camp updates live because Unreal keeps a physically
+    // nearby actor continuously relevant to it; the working theory is
+    // that a cross-camp-registered chest is never relevant to a client
+    // who isn't near it, so its item-slot replication simply doesn't
+    // reach them between camp-entry triggers.
+    //
+    // No targeted (per-connection/per-guild) relevancy hook exists in
+    // this build's reflection surface -- IsNetRelevantFor is a pure
+    // native virtual, zero UFUNCTION presence in either Engine.hpp or
+    // Pal.hpp. The only reachable lever is the blunt global
+    // AActor::bAlwaysRelevant flag, which is deliberately not scoped to
+    // guild members -- setting it makes the actor always-relevant to
+    // EVERY connected client, a real bandwidth cost on a real server
+    // with many active guilds. Test-server-only until this is confirmed
+    // to actually fix the symptom, and the production tradeoff is a
+    // separate decision even if it does.
+    //
+    // A "chest" in this codebase is a UPalMapObjectItemChestModel, a
+    // plain UObject, not an AActor -- it has no relevancy properties of
+    // its own. Its owning placed-in-world actor (UPalMapObjectConcreteModelBase::
+    // GetActor()) is what actually needs bAlwaysRelevant.
+    // GetTypedOuter() was tried first as a call-dispatch-free
+    // alternative to calling GetActor() -- it resolved 0 of 247 chests,
+    // so the Outer chain isn't the ownership path here (Outer is a
+    // naming/package concept, not gameplay ownership; not every finding
+    // in this file works out, and this one didn't). Falls back to
+    // calling GetActor() via ProcessEvent instead, reusing the exact
+    // buffer-construction pattern already proven safe in this file for
+    // GetItemContainerModule() (a sibling zero-arg, 8-byte-return
+    // UFUNCTION on the same class) -- same parms-size guard, same
+    // std::array<std::byte, 8> buffer, same memcpy-out. Not a new,
+    // unverified calling convention, the same one already exercised
+    // successfully elsewhere in this codebase.
+    //
+    // bAlwaysRelevant and bOnlyRelevantToOwner share the same byte
+    // offset in the reflection dump (0x58) -- they're packed bitfields,
+    // not independently addressable bytes. Writing through
+    // FBoolProperty::SetPropertyValueInContainer() (confirmed in the
+    // real vendored SDK, UnrealType.hpp) is the only safe way to set one
+    // without corrupting the other; a raw byte write would not be.
+    constexpr bool EnableAlwaysRelevantChestActorExperiment = true;
+
+    struct AlwaysRelevantOutcome
+    {
+        bool actor_resolved{};
+        bool property_found{};
+        bool newly_set{};
+    };
+
+    // Shared by both the periodic (all-guilds) pass and the new
+    // join-triggered (single-guild) pass below -- one implementation of
+    // the actual GetActor()-via-ProcessEvent-then-FBoolProperty-write
+    // logic, not duplicated.
+    auto set_chest_actor_always_relevant(
+        RC::Unreal::UObject* chest
+    ) -> AlwaysRelevantOutcome
+    {
+        AlwaysRelevantOutcome outcome{};
+
+        if (chest == nullptr)
+        {
+            return outcome;
+        }
+
+        auto* get_actor_function =
+            chest->GetFunctionByNameInChain(
+                STR("GetActor")
+            );
+
+        if (
+            get_actor_function == nullptr ||
+            get_actor_function->GetParmsSize() != 8
+        )
+        {
+            return outcome;
+        }
+
+        std::array<std::byte, 8> actor_buffer{};
+
+        chest->ProcessEvent(
+            get_actor_function,
+            actor_buffer.data()
+        );
+
+        RC::Unreal::UObject* outer{};
+
+        std::memcpy(
+            &outer,
+            actor_buffer.data(),
+            sizeof(outer)
+        );
+
+        if (outer == nullptr)
+        {
+            return outcome;
+        }
+
+        outcome.actor_resolved = true;
+
+        auto* property =
+            outer->GetPropertyByNameInChain(
+                STR("bAlwaysRelevant")
+            );
+
+        auto* bool_property =
+            RC::Unreal::CastField<
+                RC::Unreal::FBoolProperty
+            >(property);
+
+        if (bool_property == nullptr)
+        {
+            return outcome;
+        }
+
+        outcome.property_found = true;
+
+        if (
+            bool_property->GetPropertyValueInContainer(
+                outer
+            )
+        )
+        {
+            return outcome;
+        }
+
+        bool_property->SetPropertyValueInContainer(
+            outer,
+            true
+        );
+
+        outcome.newly_set = true;
+
+        return outcome;
+    }
+
+    // Read-only, one-shot: production showed EVERY chest actor already
+    // had bAlwaysRelevant=true before this mod ever touched anything
+    // (201/201 already_set on first pass) -- but the test server showed
+    // real variance (62/247 needed the flip). If it were a simple,
+    // universal class default baked into one Blueprint, both
+    // environments should show the same ratio. Checking whether it
+    // actually varies by chest type: for each unique registered chest,
+    // resolve its owning actor's class, read that class's own
+    // ClassDefaultObject (a plain UObject* property on UClass, not a
+    // function call) and that CDO's own bAlwaysRelevant value, and
+    // compare against the actor instance's current value. Aggregated
+    // per distinct class name, not per chest, to avoid log spam.
+    // GetFullName() is the documented-safe way to get a class name
+    // string (distinct from the FName::ToString() hazard flagged
+    // elsewhere in this file) -- used here, not improvised.
+    std::atomic_bool g_relevancy_default_investigated{false};
+
+    auto investigate_chest_actor_relevancy_default(
+        const std::unordered_map<
+            GuildKey,
+            RegistrationPlanGuild,
+            GuildKeyHash
+        >& registration_plan,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected{false};
+
+        if (
+            !g_relevancy_default_investigated.
+                compare_exchange_strong(
+                    expected,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            struct ClassSummary
+            {
+                std::uint64_t chest_count{};
+                bool cdo_default{};
+                bool cdo_resolved{};
+                std::uint64_t instance_true_count{};
+                std::uint64_t instance_false_count{};
+            };
+
+            std::unordered_map<std::string, ClassSummary>
+                by_class{};
+
+            std::unordered_set<
+                RC::Unreal::UObject*
+            > seen_chests{};
+
+            for (
+                const auto& [guild_key, guild] :
+                    registration_plan
+            )
+            {
+                for (
+                    const auto& [chest, chest_camp] :
+                        guild.chest_camps
+                )
+                {
+                    if (
+                        chest == nullptr ||
+                        !seen_chests.insert(chest).
+                            second
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* get_actor_function =
+                        chest->GetFunctionByNameInChain(
+                            STR("GetActor")
+                        );
+
+                    if (
+                        get_actor_function == nullptr ||
+                        get_actor_function->
+                            GetParmsSize() != 8
+                    )
+                    {
+                        continue;
+                    }
+
+                    std::array<std::byte, 8>
+                        actor_buffer{};
+
+                    chest->ProcessEvent(
+                        get_actor_function,
+                        actor_buffer.data()
+                    );
+
+                    RC::Unreal::UObject* actor{};
+
+                    std::memcpy(
+                        &actor,
+                        actor_buffer.data(),
+                        sizeof(actor)
+                    );
+
+                    if (actor == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* actor_class =
+                        actor->GetClassPrivate();
+
+                    if (actor_class == nullptr)
+                    {
+                        continue;
+                    }
+
+                    // CRASH FOUND AND FIXED, 25 Aug 2026: this
+                    // originally called actor_class->GetFullName(),
+                    // which returns the SDK's wide StringType BY VALUE
+                    // across the main.so/libUE4SS.so boundary. Letting
+                    // that temporary's destructor run normally
+                    // corrupted the allocator exactly like every other
+                    // documented destructor-crossing-DSO hazard in this
+                    // file (the whole reason resolve_transport_item_
+                    // name()'s leak-and-cache pattern exists for
+                    // FName::ToString() in the first place) --
+                    // reproduced live on the test server:
+                    // FMallocBinned2 "Attempt to realloc an unrecognized
+                    // block", same canary-mismatch signature as every
+                    // prior instance of this bug class. Calling a real
+                    // documented API is not the same thing as its
+                    // return value's lifecycle being safe to manage
+                    // normally -- conflating those two was the mistake.
+                    // Fixed by reusing the already-proven-safe pattern
+                    // instead of improvising further: GetFName() returns
+                    // a plain 8-byte POD FName by value (no destructor
+                    // concern, already used this way throughout this
+                    // file), fed into the existing resolve_transport_
+                    // item_name() leak-and-cache helper.
+                    const auto class_fname =
+                        actor_class->GetFName();
+
+                    TransportItemNameKey class_name_key{};
+
+                    std::memcpy(
+                        class_name_key.data(),
+                        &class_fname,
+                        class_name_key.size()
+                    );
+
+                    const auto& class_name =
+                        resolve_transport_item_name(
+                            class_name_key
+                        );
+
+                    auto& summary = by_class[class_name];
+
+                    ++summary.chest_count;
+
+                    auto* instance_property =
+                        actor->GetPropertyByNameInChain(
+                            STR("bAlwaysRelevant")
+                        );
+
+                    auto* instance_bool_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FBoolProperty
+                        >(instance_property);
+
+                    if (instance_bool_property != nullptr)
+                    {
+                        if (
+                            instance_bool_property->
+                                GetPropertyValueInContainer(
+                                    actor
+                                )
+                        )
+                        {
+                            ++summary.instance_true_count;
+                        }
+                        else
+                        {
+                            ++summary.instance_false_count;
+                        }
+                    }
+
+                    if (summary.cdo_resolved)
+                    {
+                        continue;
+                    }
+
+                    auto* cdo_slot =
+                        actor_class->
+                            GetValuePtrByPropertyNameInChain(
+                                STR(
+                                    "ClassDefaultObject"
+                                )
+                            );
+
+                    if (cdo_slot == nullptr)
+                    {
+                        continue;
+                    }
+
+                    RC::Unreal::UObject* cdo{};
+
+                    std::memcpy(
+                        &cdo,
+                        cdo_slot,
+                        sizeof(cdo)
+                    );
+
+                    if (cdo == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* cdo_property =
+                        cdo->GetPropertyByNameInChain(
+                            STR("bAlwaysRelevant")
+                        );
+
+                    auto* cdo_bool_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FBoolProperty
+                        >(cdo_property);
+
+                    if (cdo_bool_property == nullptr)
+                    {
+                        continue;
+                    }
+
+                    summary.cdo_default =
+                        cdo_bool_property->
+                            GetPropertyValueInContainer(
+                                cdo
+                            );
+
+                    summary.cdo_resolved = true;
+                }
+            }
+
+            for (const auto& [class_name, summary] : by_class)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "RELEVANCY_DEFAULT_BY_CLASS "
+                    "class=%s chest_count=%llu "
+                    "cdo_resolved=%d cdo_default=%d "
+                    "instance_true=%llu "
+                    "instance_false=%llu",
+                    class_name.c_str(),
+                    static_cast<unsigned long long>(
+                        summary.chest_count
+                    ),
+                    summary.cdo_resolved ? 1 : 0,
+                    summary.cdo_default ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        summary.instance_true_count
+                    ),
+                    static_cast<unsigned long long>(
+                        summary.instance_false_count
+                    )
+                );
+            }
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RELEVANCY_DEFAULT_BY_CLASS RESULT=DONE"
+            );
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RELEVANCY_DEFAULT_BY_CLASS RESULT=EXCEPTION"
+            );
+        }
+    }
+
+    auto apply_always_relevant_to_chest_actors(
+        const std::unordered_map<
+            GuildKey,
+            RegistrationPlanGuild,
+            GuildKeyHash
+        >& registration_plan,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (
+            !EnableAlwaysRelevantChestActorExperiment ||
+            !plan_complete
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            std::unordered_set<
+                RC::Unreal::UObject*
+            > seen_chests{};
+
+            std::uint64_t chests_seen{};
+            std::uint64_t actors_resolved{};
+            std::uint64_t properties_found{};
+            std::uint64_t newly_set{};
+            std::uint64_t already_set{};
+
+            for (
+                const auto& [guild_key, guild] :
+                    registration_plan
+            )
+            {
+                for (
+                    const auto& [chest, chest_camp] :
+                        guild.chest_camps
+                )
+                {
+                    if (
+                        chest == nullptr ||
+                        !seen_chests.insert(chest).
+                            second
+                    )
+                    {
+                        continue;
+                    }
+
+                    ++chests_seen;
+
+                    const auto outcome =
+                        set_chest_actor_always_relevant(
+                            chest
+                        );
+
+                    if (!outcome.actor_resolved)
+                    {
+                        continue;
+                    }
+
+                    ++actors_resolved;
+
+                    if (!outcome.property_found)
+                    {
+                        continue;
+                    }
+
+                    ++properties_found;
+
+                    if (outcome.newly_set)
+                    {
+                        ++newly_set;
+                    }
+                    else
+                    {
+                        ++already_set;
+                    }
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "ALWAYS_RELEVANT_EXPERIMENT "
+                "chests_seen=%llu actors_resolved=%llu "
+                "properties_found=%llu already_set=%llu "
+                "newly_set=%llu",
+                static_cast<unsigned long long>(
+                    chests_seen
+                ),
+                static_cast<unsigned long long>(
+                    actors_resolved
+                ),
+                static_cast<unsigned long long>(
+                    properties_found
+                ),
+                static_cast<unsigned long long>(
+                    already_set
+                ),
+                static_cast<unsigned long long>(
+                    newly_set
+                )
+            );
+
+            if (
+                actors_resolved == chests_seen &&
+                properties_found == chests_seen
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ALWAYS_RELEVANT_EXPERIMENT RESULT=PASS"
+                );
+            }
+            else
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ALWAYS_RELEVANT_EXPERIMENT "
+                    "RESULT=INCOMPLETE"
+                );
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "ALWAYS_RELEVANT_EXPERIMENT RESULT=EXCEPTION"
+            );
+        }
+    }
+
+    // EXPERIMENTAL -- 25 Aug 2026, same status as the periodic pass
+    // above (test-server only, not proven safe for production). User's
+    // own idea: rather than shortening the global 8s reconcile interval
+    // for everyone, run a pass scoped to just the joining player's own
+    // guild the moment they connect, closing the one real remaining gap
+    // (a chest built moments before they joined, not yet through a
+    // periodic pass) without adding cost for guilds nobody's actively
+    // joining into. Note for whoever revisits this: bAlwaysRelevant
+    // persists on the actor once set, it isn't per-connection state, so
+    // this does NOT help a *returning* player see anything the periodic
+    // pass hadn't already caught before they left -- it only shrinks the
+    // brand-new-chest timing window.
+    //
+    // "On join" is detected by polling, not a native event hook. Two
+    // candidates were tried first and both registered cleanly but never
+    // actually fired on a real, repeated connect/disconnect test:
+    // /Script/Engine.GameModeBase:K2_PostLogin (the standard Unreal join
+    // event) and /Script/Pal.PalPlayerState:ReceiveNotifyLoginComplete
+    // (Pal-specific, looked like a strong candidate). Neither is
+    // actually invoked by Palworld's real native join flow, at least not
+    // through this dispatch path -- not every plausible-sounding
+    // function in a reflection dump turns out to be a live code path,
+    // and guessing a third name blindly wasn't worth it. Polling reuses
+    // the exact same FindAllOf + "seen" dedup pattern already proven
+    // throughout this file (get_chest_discovery_buffer() and friends),
+    // just applied to APalPlayerState instead of chests -- not a new
+    // technique, the established one.
+    //
+    // Player -> guild resolution reuses the exact same raw-property-read
+    // pattern as copy_guild_key() (GetValuePtrByPropertyNameInChain +
+    // memcpy, no FName::ToString, no new hazard class): starting from
+    // the discovered APalPlayerState, read GuildBelongTo (confirmed via
+    // reflection), then that guild object's own UPalGroupBase::ID (FGuid,
+    // inherited by UPalGroupGuildBase) -- matches the exact GuildKey
+    // shape this file already keys registration_plan by.
+    auto resolve_player_guild_key(
+        RC::Unreal::UObject* player_state,
+        GuildKey& output
+    ) -> bool
+    {
+        if (player_state == nullptr)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RESOLVE_PLAYER_GUILD "
+                "RESULT=NULL_PLAYER_STATE"
+            );
+            return false;
+        }
+
+        auto* guild_slot =
+            player_state->
+                GetValuePtrByPropertyNameInChain(
+                    STR("GuildBelongTo")
+                );
+
+        if (guild_slot == nullptr)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RESOLVE_PLAYER_GUILD "
+                "RESULT=NO_GUILDBELONGTO_SLOT"
+            );
+            return false;
+        }
+
+        RC::Unreal::UObject* guild{};
+
+        std::memcpy(
+            &guild,
+            guild_slot,
+            sizeof(guild)
+        );
+
+        if (guild == nullptr)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RESOLVE_PLAYER_GUILD "
+                "RESULT=GUILDBELONGTO_NULL"
+            );
+            return false;
+        }
+
+        auto* id_slot =
+            guild->GetValuePtrByPropertyNameInChain(
+                STR("ID")
+            );
+
+        if (id_slot == nullptr)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RESOLVE_PLAYER_GUILD "
+                "RESULT=NO_ID_SLOT"
+            );
+            return false;
+        }
+
+        std::memcpy(
+            output.data(),
+            id_slot,
+            output.size()
+        );
+
+        if (guid_is_zero(output))
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RESOLVE_PLAYER_GUILD "
+                "RESULT=ZERO_ID"
+            );
+            return false;
+        }
+
+        emit_format(
+            "[ModIntegratedStorageCpp] "
+            "RESOLVE_PLAYER_GUILD RESULT=PASS guild=%s",
+            guid_to_hex(output).data()
+        );
+
+        return true;
+    }
+
+    // Returns whether this player was successfully resolved to an
+    // eligible guild and processed. The caller (poll_for_newly_joined_
+    // players) uses this to decide whether to mark the PlayerState as
+    // done or retry it on the next poll -- GuildBelongTo is empirically
+    // not always populated yet at the exact moment a PlayerState is
+    // first discovered (a real timing race, confirmed via live test:
+    // RESOLVE_PLAYER_GUILD RESULT=GUILDBELONGTO_NULL on first sight),
+    // so a single-shot "seen once, done forever" would permanently miss
+    // players whose guild data simply hadn't loaded yet on the first
+    // 1-second poll.
+    auto apply_always_relevant_on_player_join(
+        RC::Unreal::UObject* player_state
+    ) noexcept -> bool
+    {
+        if (!EnableAlwaysRelevantChestActorExperiment)
+        {
+            return false;
+        }
+
+        try
+        {
+            GuildKey player_guild{};
+
+            if (
+                !resolve_player_guild_key(
+                    player_state,
+                    player_guild
+                )
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ALWAYS_RELEVANT_ON_JOIN "
+                    "RESULT=NO_GUILD"
+                );
+                return false;
+            }
+
+            const auto plan_iterator =
+                g_cached_registration_plan.find(
+                    player_guild
+                );
+
+            if (
+                plan_iterator ==
+                    g_cached_registration_plan.end()
+            )
+            {
+                emit_marker(
+                    "[ModIntegratedStorageCpp] "
+                    "ALWAYS_RELEVANT_ON_JOIN "
+                    "RESULT=NO_PLAN_GUILD"
+                );
+                return false;
+            }
+
+            std::uint64_t chests_seen{};
+            std::uint64_t actors_resolved{};
+            std::uint64_t properties_found{};
+            std::uint64_t newly_set{};
+
+            for (
+                const auto& [chest, chest_camp] :
+                    plan_iterator->second.chest_camps
+            )
+            {
+                if (chest == nullptr)
+                {
+                    continue;
+                }
+
+                ++chests_seen;
+
+                const auto outcome =
+                    set_chest_actor_always_relevant(
+                        chest
+                    );
+
+                if (outcome.actor_resolved)
+                {
+                    ++actors_resolved;
+                }
+
+                if (outcome.property_found)
+                {
+                    ++properties_found;
+                }
+
+                if (outcome.newly_set)
+                {
+                    ++newly_set;
+                }
+            }
+
+            emit_format(
+                "[ModIntegratedStorageCpp] "
+                "ALWAYS_RELEVANT_ON_JOIN "
+                "guild=%s chests_seen=%llu "
+                "actors_resolved=%llu "
+                "properties_found=%llu newly_set=%llu",
+                guid_to_hex(player_guild).data(),
+                static_cast<unsigned long long>(
+                    chests_seen
+                ),
+                static_cast<unsigned long long>(
+                    actors_resolved
+                ),
+                static_cast<unsigned long long>(
+                    properties_found
+                ),
+                static_cast<unsigned long long>(
+                    newly_set
+                )
+            );
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "ALWAYS_RELEVANT_ON_JOIN RESULT=PASS"
+            );
+
+            return true;
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "ALWAYS_RELEVANT_ON_JOIN RESULT=EXCEPTION"
+            );
+
+            return false;
+        }
+    }
+
+    // Polling replacement for the dead-end event hooks above. Every
+    // PlayerJoinPollInterval, find all current PalPlayerState instances
+    // and skip any already in g_seen_player_states (same dedup intent
+    // as seen_chests elsewhere in this file, but only marked done on
+    // success -- see apply_always_relevant_on_player_join's own comment
+    // for why a plain single-shot dedup isn't safe here: GuildBelongTo
+    // isn't always populated yet on first sight, so a failed attempt
+    // retries on the next poll instead of being silently dropped
+    // forever). Deliberately does not try to detect disconnects/
+    // removals -- a PlayerState that never succeeds (e.g. genuinely
+    // guildless) just retries harmlessly and cheaply every poll for as
+    // long as it exists.
+    auto poll_for_newly_joined_players() noexcept -> void
+    {
+        if (!EnableAlwaysRelevantChestActorExperiment)
+        {
+            return;
+        }
+
+        try
+        {
+            auto& player_states =
+                get_player_state_discovery_buffer();
+
+            player_states.clear();
+
+            RC::Unreal::UObjectGlobals::FindAllOf(
+                STR("PalPlayerState"),
+                player_states
+            );
+
+            for (auto* player_state : player_states)
+            {
+                if (
+                    player_state == nullptr ||
+                    g_seen_player_states.contains(
+                        player_state
+                    )
+                )
+                {
+                    continue;
+                }
+
+                if (
+                    apply_always_relevant_on_player_join(
+                        player_state
+                    )
+                )
+                {
+                    g_seen_player_states.insert(
+                        player_state
+                    );
+                }
+            }
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "PLAYER_JOIN_POLL RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto run_access_owner_class_identity_probe(
         RC::Unreal::UObject* chest,
         bool plan_complete
@@ -15638,6 +16542,19 @@ namespace
             plan_complete
         );
 
+        // Must run before apply_always_relevant_to_chest_actors below --
+        // needs to see the pre-existing instance state, not the state
+        // after our own code has already flipped everything to true.
+        investigate_chest_actor_relevancy_default(
+            registration_plan,
+            plan_complete
+        );
+
+        apply_always_relevant_to_chest_actors(
+            registration_plan,
+            plan_complete
+        );
+
         run_controlled_full_plan_registration(
             planned_execution_pairs,
             registration_metadata,
@@ -16219,6 +17136,21 @@ namespace
                 run_read_only_discovery();
                 request_read_only_chest_association();
                 run_egg_hatching_model_probe();
+            }
+
+            if (
+                EnableAlwaysRelevantChestActorExperiment &&
+                (
+                    timepoint_is_empty(
+                        g_last_player_join_poll
+                    ) ||
+                    now - g_last_player_join_poll >=
+                        PlayerJoinPollInterval
+                )
+            )
+            {
+                g_last_player_join_poll = now;
+                poll_for_newly_joined_players();
             }
 
             if (
