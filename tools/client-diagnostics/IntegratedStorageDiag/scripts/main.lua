@@ -21,9 +21,23 @@ RegisterHook(
     "/Script/Pal.PalBaseCampModuleItemStorage:OnRep_ContainerInfos",
     function(Context)
         containerInfosFires = containerInfosFires + 1
+
+        local count = -1
+        local ok, module = pcall(function() return Context:get() end)
+        if ok and module and module:IsValid() then
+            local ok2, arr = pcall(function() return module.ContainerInfos end)
+            if ok2 and arr then
+                local ok3, num = pcall(function() return arr:GetArrayNum() end)
+                if ok3 then
+                    count = num
+                end
+            end
+        end
+
         log(string.format(
-            "OnRep_ContainerInfos FIRED total=%d",
-            containerInfosFires
+            "OnRep_ContainerInfos FIRED total=%d replicated_containerinfos_count=%d",
+            containerInfosFires,
+            count
         ))
     end
 )
