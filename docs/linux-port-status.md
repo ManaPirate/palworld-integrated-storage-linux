@@ -838,7 +838,7 @@ effect.
 
   Also built a join-triggered variant, scoped to just the connecting
   player's own guild rather than shortening the global 8s reconcile
-  interval for everyone (the user's own idea, worth the extra
+  interval for everyone (the operator's own idea, worth the extra
   targeting) — closes the one remaining gap (a chest built moments
   before someone joins, not yet through a periodic pass) without
   adding cost for guilds nobody's actively joining into. Note:
