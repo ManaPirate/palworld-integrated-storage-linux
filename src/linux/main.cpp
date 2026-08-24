@@ -12863,18 +12863,16 @@ namespace
 
 
 
-    // EXPERIMENTAL -- 25 Aug 2026 -- not proven safe, test-server only.
-    //
-    // Investigating a real live-tested symptom: a client's build menu at
-    // one camp doesn't live-update materials consumed from a
+    // 25 Aug 2026 -- fixes a real live-tested symptom: a client's build
+    // menu at one camp didn't live-update materials consumed from a
     // cross-registered chest at a different camp, even though the
-    // consumption genuinely happens server-side (confirmed by direct
-    // live test) -- it only refreshes on the next camp transition. The
+    // consumption genuinely happened server-side (confirmed by direct
+    // live test) -- it only refreshed on the next camp transition. A
     // client's OWN camp updates live because Unreal keeps a physically
-    // nearby actor continuously relevant to it; the working theory is
-    // that a cross-camp-registered chest is never relevant to a client
-    // who isn't near it, so its item-slot replication simply doesn't
-    // reach them between camp-entry triggers.
+    // nearby actor continuously relevant to it; a cross-camp-registered
+    // chest is never relevant to a client who isn't near it, so its
+    // item-slot replication doesn't reach them between camp-entry
+    // triggers.
     //
     // No targeted (per-connection/per-guild) relevancy hook exists in
     // this build's reflection surface -- IsNetRelevantFor is a pure
@@ -12882,10 +12880,15 @@ namespace
     // Pal.hpp. The only reachable lever is the blunt global
     // AActor::bAlwaysRelevant flag, which is deliberately not scoped to
     // guild members -- setting it makes the actor always-relevant to
-    // EVERY connected client, a real bandwidth cost on a real server
-    // with many active guilds. Test-server-only until this is confirmed
-    // to actually fix the symptom, and the production tradeoff is a
-    // separate decision even if it does.
+    // EVERY connected client, a real bandwidth cost on a server with
+    // many active guilds. Live-confirmed fixing the symptom on both the
+    // isolated test server and production (a real, direct, in-game
+    // test: cross-camp materials updating instantly, matching how local
+    // materials already behaved). The bandwidth cost on a real
+    // multi-guild server over time is an ongoing thing to keep an eye
+    // on, not a pre-merge blocker anymore -- this flag stays here as a
+    // fast, no-rebuild-needed off switch if that ever turns out to be a
+    // real problem in practice.
     //
     // A "chest" in this codebase is a UPalMapObjectItemChestModel, a
     // plain UObject, not an AActor -- it has no relevancy properties of
@@ -12910,7 +12913,7 @@ namespace
     // FBoolProperty::SetPropertyValueInContainer() (confirmed in the
     // real vendored SDK, UnrealType.hpp) is the only safe way to set one
     // without corrupting the other; a raw byte write would not be.
-    constexpr bool EnableAlwaysRelevantChestActorExperiment = true;
+    constexpr bool EnableAlwaysRelevantChestActors = true;
 
     struct AlwaysRelevantOutcome
     {
@@ -13305,7 +13308,7 @@ namespace
     ) noexcept -> void
     {
         if (
-            !EnableAlwaysRelevantChestActorExperiment ||
+            !EnableAlwaysRelevantChestActors ||
             !plan_complete
         )
         {
@@ -13426,10 +13429,10 @@ namespace
         }
     }
 
-    // EXPERIMENTAL -- 25 Aug 2026, same status as the periodic pass
-    // above (test-server only, not proven safe for production). User's
-    // own idea: rather than shortening the global 8s reconcile interval
-    // for everyone, run a pass scoped to just the joining player's own
+    // 25 Aug 2026, same status as the periodic pass above (live on
+    // main, confirmed working). My own idea: rather than shortening the
+    // global 8s reconcile interval for everyone, run a pass scoped to
+    // just the joining player's own
     // guild the moment they connect, closing the one real remaining gap
     // (a chest built moments before they joined, not yet through a
     // periodic pass) without adding cost for guilds nobody's actively
@@ -13564,7 +13567,7 @@ namespace
         RC::Unreal::UObject* player_state
     ) noexcept -> bool
     {
-        if (!EnableAlwaysRelevantChestActorExperiment)
+        if (!EnableAlwaysRelevantChestActors)
         {
             return false;
         }
@@ -13697,7 +13700,7 @@ namespace
     // long as it exists.
     auto poll_for_newly_joined_players() noexcept -> void
     {
-        if (!EnableAlwaysRelevantChestActorExperiment)
+        if (!EnableAlwaysRelevantChestActors)
         {
             return;
         }
@@ -17139,7 +17142,7 @@ namespace
             }
 
             if (
-                EnableAlwaysRelevantChestActorExperiment &&
+                EnableAlwaysRelevantChestActors &&
                 (
                     timepoint_is_empty(
                         g_last_player_join_poll
