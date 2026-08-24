@@ -867,13 +867,45 @@ effect.
   `get_chest_discovery_buffer()`'s own existing pattern), never a
   local/stack vector `main.so`'s own allocator would try to destroy.
 
-  **Status: both pieces are live and confirmed working on the
-  isolated test server, still uncommitted to any branch as of this
-  writing pending a wider push.** Not deployed to production with
-  this — even if proven correct, `bAlwaysRelevant` makes every
-  cross-registered camp always-relevant to *every* connected client,
-  a real bandwidth cost on a server with several active guilds, that
-  needs its own conversation separate from whether the fix works.
+  **Status: pushed to
+  [`experimental/cross-camp-always-relevant`](https://github.com/ManaPirate/palworld-integrated-storage-linux/tree/experimental/cross-camp-always-relevant)
+  (commit `51440de`), deliberately not `main`.** Both pieces confirmed
+  working on the isolated test server first. Deployed to production
+  after a backup (operator's own call, wanted real data): clean
+  startup, `FULL_PLAN_REGISTER` completing (283/283) against the real
+  save, zero crashes. First check showed every one of production's
+  ~201 chests already `bAlwaysRelevant=true` before anything ran,
+  which looked like a real mystery — turned out to be a timing
+  artifact, not a production-specific default: ~80s had elapsed
+  before the log was checked, enough for ~10 reconcile passes to
+  already flip everything, idempotently. Confirmed with a genuinely
+  fresh-boot capture on the test server (before the periodic pass had
+  run even once): all 257 chests across all 16 real chest/storage
+  Blueprint classes start `bAlwaysRelevant=false`, no per-class
+  variance. The fix is doing exactly what it's supposed to.
+
+  **A second crash found and fixed while investigating that.** The
+  read-only diagnostic added to check this
+  (`investigate_chest_actor_relevancy_default`) originally called
+  `actor_class->GetFullName()` to log class names — that returns the
+  SDK's wide `StringType` by value across the `main.so`/`libUE4SS.so`
+  boundary, and letting its destructor run normally reproduced the
+  exact `FMallocBinned2` canary-mismatch crash class already
+  documented elsewhere in this file (§5's whole reason for existing).
+  Treating "this is a real documented API" as equivalent to "its
+  return value is safe to manage normally" was the mistake — this
+  file already taught that lesson once. Fixed by reusing `GetFName()`
+  (a plain 8-byte POD, no destructor concern) through the existing
+  `resolve_transport_item_name()` cache instead of improvising a new
+  string-handling path. Zero crashes since. Even a genuinely
+  experimental branch built carefully all session isn't immune to
+  this hazard class — worth remembering.
+
+  Still not deployed to production for the long term without a
+  separate conversation about the tradeoff: even proven correct,
+  `bAlwaysRelevant` makes every cross-registered camp always-relevant
+  to *every* connected client, not just guild members, a real
+  bandwidth cost on a server with several active guilds.
 
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —

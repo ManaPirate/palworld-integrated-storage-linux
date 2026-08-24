@@ -13005,6 +13005,296 @@ namespace
         return outcome;
     }
 
+    // Read-only, one-shot: production showed EVERY chest actor already
+    // had bAlwaysRelevant=true before this mod ever touched anything
+    // (201/201 already_set on first pass) -- but the test server showed
+    // real variance (62/247 needed the flip). If it were a simple,
+    // universal class default baked into one Blueprint, both
+    // environments should show the same ratio. Checking whether it
+    // actually varies by chest type: for each unique registered chest,
+    // resolve its owning actor's class, read that class's own
+    // ClassDefaultObject (a plain UObject* property on UClass, not a
+    // function call) and that CDO's own bAlwaysRelevant value, and
+    // compare against the actor instance's current value. Aggregated
+    // per distinct class name, not per chest, to avoid log spam.
+    // GetFullName() is the documented-safe way to get a class name
+    // string (distinct from the FName::ToString() hazard flagged
+    // elsewhere in this file) -- used here, not improvised.
+    std::atomic_bool g_relevancy_default_investigated{false};
+
+    auto investigate_chest_actor_relevancy_default(
+        const std::unordered_map<
+            GuildKey,
+            RegistrationPlanGuild,
+            GuildKeyHash
+        >& registration_plan,
+        bool plan_complete
+    ) noexcept -> void
+    {
+        if (!plan_complete)
+        {
+            return;
+        }
+
+        bool expected{false};
+
+        if (
+            !g_relevancy_default_investigated.
+                compare_exchange_strong(
+                    expected,
+                    true,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )
+        )
+        {
+            return;
+        }
+
+        try
+        {
+            struct ClassSummary
+            {
+                std::uint64_t chest_count{};
+                bool cdo_default{};
+                bool cdo_resolved{};
+                std::uint64_t instance_true_count{};
+                std::uint64_t instance_false_count{};
+            };
+
+            std::unordered_map<std::string, ClassSummary>
+                by_class{};
+
+            std::unordered_set<
+                RC::Unreal::UObject*
+            > seen_chests{};
+
+            for (
+                const auto& [guild_key, guild] :
+                    registration_plan
+            )
+            {
+                for (
+                    const auto& [chest, chest_camp] :
+                        guild.chest_camps
+                )
+                {
+                    if (
+                        chest == nullptr ||
+                        !seen_chests.insert(chest).
+                            second
+                    )
+                    {
+                        continue;
+                    }
+
+                    auto* get_actor_function =
+                        chest->GetFunctionByNameInChain(
+                            STR("GetActor")
+                        );
+
+                    if (
+                        get_actor_function == nullptr ||
+                        get_actor_function->
+                            GetParmsSize() != 8
+                    )
+                    {
+                        continue;
+                    }
+
+                    std::array<std::byte, 8>
+                        actor_buffer{};
+
+                    chest->ProcessEvent(
+                        get_actor_function,
+                        actor_buffer.data()
+                    );
+
+                    RC::Unreal::UObject* actor{};
+
+                    std::memcpy(
+                        &actor,
+                        actor_buffer.data(),
+                        sizeof(actor)
+                    );
+
+                    if (actor == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* actor_class =
+                        actor->GetClassPrivate();
+
+                    if (actor_class == nullptr)
+                    {
+                        continue;
+                    }
+
+                    // CRASH FOUND AND FIXED, 25 Aug 2026: this
+                    // originally called actor_class->GetFullName(),
+                    // which returns the SDK's wide StringType BY VALUE
+                    // across the main.so/libUE4SS.so boundary. Letting
+                    // that temporary's destructor run normally
+                    // corrupted the allocator exactly like every other
+                    // documented destructor-crossing-DSO hazard in this
+                    // file (the whole reason resolve_transport_item_
+                    // name()'s leak-and-cache pattern exists for
+                    // FName::ToString() in the first place) --
+                    // reproduced live on the test server:
+                    // FMallocBinned2 "Attempt to realloc an unrecognized
+                    // block", same canary-mismatch signature as every
+                    // prior instance of this bug class. Calling a real
+                    // documented API is not the same thing as its
+                    // return value's lifecycle being safe to manage
+                    // normally -- conflating those two was the mistake.
+                    // Fixed by reusing the already-proven-safe pattern
+                    // instead of improvising further: GetFName() returns
+                    // a plain 8-byte POD FName by value (no destructor
+                    // concern, already used this way throughout this
+                    // file), fed into the existing resolve_transport_
+                    // item_name() leak-and-cache helper.
+                    const auto class_fname =
+                        actor_class->GetFName();
+
+                    TransportItemNameKey class_name_key{};
+
+                    std::memcpy(
+                        class_name_key.data(),
+                        &class_fname,
+                        class_name_key.size()
+                    );
+
+                    const auto& class_name =
+                        resolve_transport_item_name(
+                            class_name_key
+                        );
+
+                    auto& summary = by_class[class_name];
+
+                    ++summary.chest_count;
+
+                    auto* instance_property =
+                        actor->GetPropertyByNameInChain(
+                            STR("bAlwaysRelevant")
+                        );
+
+                    auto* instance_bool_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FBoolProperty
+                        >(instance_property);
+
+                    if (instance_bool_property != nullptr)
+                    {
+                        if (
+                            instance_bool_property->
+                                GetPropertyValueInContainer(
+                                    actor
+                                )
+                        )
+                        {
+                            ++summary.instance_true_count;
+                        }
+                        else
+                        {
+                            ++summary.instance_false_count;
+                        }
+                    }
+
+                    if (summary.cdo_resolved)
+                    {
+                        continue;
+                    }
+
+                    auto* cdo_slot =
+                        actor_class->
+                            GetValuePtrByPropertyNameInChain(
+                                STR(
+                                    "ClassDefaultObject"
+                                )
+                            );
+
+                    if (cdo_slot == nullptr)
+                    {
+                        continue;
+                    }
+
+                    RC::Unreal::UObject* cdo{};
+
+                    std::memcpy(
+                        &cdo,
+                        cdo_slot,
+                        sizeof(cdo)
+                    );
+
+                    if (cdo == nullptr)
+                    {
+                        continue;
+                    }
+
+                    auto* cdo_property =
+                        cdo->GetPropertyByNameInChain(
+                            STR("bAlwaysRelevant")
+                        );
+
+                    auto* cdo_bool_property =
+                        RC::Unreal::CastField<
+                            RC::Unreal::FBoolProperty
+                        >(cdo_property);
+
+                    if (cdo_bool_property == nullptr)
+                    {
+                        continue;
+                    }
+
+                    summary.cdo_default =
+                        cdo_bool_property->
+                            GetPropertyValueInContainer(
+                                cdo
+                            );
+
+                    summary.cdo_resolved = true;
+                }
+            }
+
+            for (const auto& [class_name, summary] : by_class)
+            {
+                emit_format(
+                    "[ModIntegratedStorageCpp] "
+                    "RELEVANCY_DEFAULT_BY_CLASS "
+                    "class=%s chest_count=%llu "
+                    "cdo_resolved=%d cdo_default=%d "
+                    "instance_true=%llu "
+                    "instance_false=%llu",
+                    class_name.c_str(),
+                    static_cast<unsigned long long>(
+                        summary.chest_count
+                    ),
+                    summary.cdo_resolved ? 1 : 0,
+                    summary.cdo_default ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        summary.instance_true_count
+                    ),
+                    static_cast<unsigned long long>(
+                        summary.instance_false_count
+                    )
+                );
+            }
+
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RELEVANCY_DEFAULT_BY_CLASS RESULT=DONE"
+            );
+        }
+        catch (...)
+        {
+            emit_marker(
+                "[ModIntegratedStorageCpp] "
+                "RELEVANCY_DEFAULT_BY_CLASS RESULT=EXCEPTION"
+            );
+        }
+    }
+
     auto apply_always_relevant_to_chest_actors(
         const std::unordered_map<
             GuildKey,
@@ -16249,6 +16539,14 @@ namespace
 
         run_access_owner_class_identity_probe(
             registration_probe_chest,
+            plan_complete
+        );
+
+        // Must run before apply_always_relevant_to_chest_actors below --
+        // needs to see the pre-existing instance state, not the state
+        // after our own code has already flipped everything to true.
+        investigate_chest_actor_relevancy_default(
+            registration_plan,
             plan_complete
         );
 
