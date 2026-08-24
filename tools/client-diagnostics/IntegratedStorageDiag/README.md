@@ -24,8 +24,13 @@ fires. It needs a real client.
 
 Hooks `OnRep_ContainerInfos` and `OnRep_GuildContainerInfo` on
 `PalBaseCampModuleItemStorage` and logs (`[ISDIAG] ... FIRED
-total=N`) every time either fires. Never touches the hook `Context` or
-any parameters, never blocks or replaces the real handler, never
+total=N`) every time either fires. `OnRep_ContainerInfos` also reads the
+actual replicated array size (`replicated_containerinfos_count=N`,
+`module.ContainerInfos:GetArrayNum()`, a plain property read, no state
+touched) — added 25 Aug 2026 to tell "fired but replicated array is
+truncated at high pair counts" apart from "never fired at all", which
+firing alone can't distinguish. Never touches the hook `Context` or any
+parameters otherwise, never blocks or replaces the real handler, never
 mutates game state. Safe to run standalone with no other mods.
 
 ## How to use it
