@@ -909,6 +909,49 @@ effect.
   members, a real cost on a server with several active guilds. Worth
   watching over time, not yet formally evaluated.
 
+  **Second lever found: `NetDormancy`, 27 Aug 2026.** Watched a
+  screenshare of a player still hitting the underlying no-op bug even
+  with `bAlwaysRelevant` already live in production — teleporting back
+  and forth between bases a few times fixed it for them. That pointed
+  at something `bAlwaysRelevant` alone doesn't cover: it only changes
+  the *outcome* of a future per-connection relevancy check, it doesn't
+  wake an actor that's already dormant. A dormant actor is skipped
+  from relevancy re-evaluation entirely until something flushes it —
+  native base-camp entry/exit proximity plausibly does this, which
+  would explain why repeated teleporting worked as an accidental
+  workaround.
+
+  Checked the real reflection dump before touching anything: `AActor`
+  has a genuinely reflected `NetDormancy` property (offset `0x151`,
+  `TEnumAsByte<ENetDormancy>`) and a real callable
+  `SetNetDormancy(TEnumAsByte<ENetDormancy> NewDormancy)` UFUNCTION —
+  same class of access already proven safe elsewhere in this file, not
+  a guess. Extended `set_chest_actor_always_relevant()` to read
+  `NetDormancy` via the same raw-property-read pattern already used
+  for `GuildBelongTo`, and when it isn't `DORM_Never`, call
+  `SetNetDormancy(DORM_Never)` via `ProcessEvent`. No generated Parms
+  struct exists in the reflection dump for this call, so the parms
+  buffer is sized dynamically off `GetParmsSize()` rather than
+  guessed, with a sanity upper bound; a zeroed buffer already encodes
+  `DORM_Never` (value `0`), so no parameter-offset lookup is needed the
+  way `FULL_PLAN_REGISTER`'s object-parameter write requires.
+
+  **Confirmed, not assumed.** Deployed to the test server first: on a
+  fresh restart, every single resolved chest actor was dormant
+  (`dormancy_checked=222 dormant_before=222 dormancy_cleared=222` on
+  the first pass), and once the world fully settled, 253 of 257
+  chests were still dormant even though 222 of them already had
+  `bAlwaysRelevant=true` from the prior pass — real, direct evidence
+  the two mechanisms are independent, not that one implies the other.
+  Idempotent from the next pass onward (`dormant_before=0`). Deployed
+  to production the same way (backup first): 174-181 of 188 real
+  chests dormant across the settling passes right after restart, one
+  pass showing a real recurrence (174 going dormant again after having
+  already been cleared, most likely a one-time post-restart engine
+  settling event rather than a steady pattern), then stable at
+  `dormant_before=0` for two consecutive passes after that. Zero
+  crashes on either environment throughout.
+
 **3. Reported: active interference with unrelated systems on v1.0.3
 (17 Aug 2026, single source, unconfirmed).** Distinct from problem 2 —
 this isn't the mod failing to do something, it's the mod (or the
@@ -948,6 +991,7 @@ duplicated here.
 
 | Stage | Result |
 |---|---|
+| Second lever: `NetDormancy` cleared on chest actors | **See §9 problem 2 for full detail.** A player still hit the underlying no-op bug with `bAlwaysRelevant` already live; teleporting between bases a few times fixed it. Root cause: `bAlwaysRelevant` doesn't wake an already-dormant actor. Extended the fix to also call the real `SetNetDormancy(DORM_Never)` UFUNCTION via reflection. Confirmed on both environments: the large majority of chest actors were genuinely dormant regardless of `bAlwaysRelevant`'s own state (up to 253/257 on the test server, 174-181/188 on production), idempotent from the next pass onward. Zero crashes. Committed `cdb4ee6`, pushed directly to `main`. |
 | Step 13: scale ruled out further, real bug found, fix built and merged | **See §9 problem 2 for full detail.** w00z001 retested at real scale (58 pairs) — registration still clean, `SEMANTIC_OBSERVATION` still `UNCHANGED`. Their `GUILD_CHEST_MODULE`/`SLOT_LAYOUT`/`QUERY_ASSEMBLY` INCOMPLETE findings confirmed a red herring (old abandoned Stage 4d.5b diagnostics, reproduced identically on our own infra). Pushed our own guild to 82 pairs, still clean server-side. A real live build session at scale found the actual bug: cross-camp materials don't live-update in the build menu (same-camp materials do), though the underlying consumption is correct — reframes every `SEMANTIC_OBSERVATION UNCHANGED` result to date as not reliable evidence of a functional bug. Built and live-confirmed a fix (`bAlwaysRelevant` on registered chests' owning actors, plus a join-triggered scoped variant using polling after two native join hooks turned out to never fire), tested clean on both the test server and production, then merged into `main` (PR #10, merge commit `b4cebd1`) — production bandwidth tradeoff at scale still not formally evaluated, just running live now. |
 | Value-change-while-relevant test | **Closes the replication question entirely.** The one remaining untested replication scenario from Step 12 (a client walking toward newly-relevant camps): does a genuine value change replicate to a client who's already relevant/stationary? Identified my real guild live from server data (camp count went 1→2, no need to ask), built a throwaway unregister-then-natural-re-add test with a 5-minute wall-clock grace window (first ungated attempt fired within 45s, too fast to coordinate). Fired on schedule against a client that had been connected and parked for 3+ minutes: the removal replicated in 0.4s, the natural re-add replicated correctly 16s later when the exclusion window expired. Combined with Step 12, both replication scenarios this investigation could construct now have positive, verified evidence. Registration, replication, and the build UI are proven correct in every configuration tested. What's failing for the original reporters isn't explained by anything found here — remaining candidates are scale or reporter-specific setup. Removed the test code afterward (confirmed `main.so` hash identical to the pre-test baseline). Zero crashes. Full detail in `docs/V1.0.3_DIAGNOSTIC_PLAN.md` Step 13. |
 | Real end-to-end build test | **Pivotal result of the whole investigation.** Ran the `IntegratedStorageDiag` client mod against my real guild: walked between a pre-existing camp and a freshly-built second camp repeatedly over ~40 minutes. `OnRep_ContainerInfos` fired 8 times, clearly tracking real camp visits, not just once at connect — falsifies the replication-broken hypothesis. With empty personal inventory and empty destination-camp storage, I then **actually built** using materials from the other camp — a real placed build, not just a UI count. First genuine end-to-end test in the investigation: every earlier "reproduces" result (Steps 4–11) was a read-only reflection diagnostic against server state, never a live build attempt. Registration, replication, and the build UI are now confirmed correct together under these conditions. Doesn't mean the original reports were wrong — means the mechanism itself is no longer the suspect, and finding what's actually failing for the original reporters needs a different axis (scale, timing, or reporter-specific setup). Removed the throwaway guild-coordinate-dump helper used to locate a test guild, superseded once I built my own second camp. Zero crashes. |
