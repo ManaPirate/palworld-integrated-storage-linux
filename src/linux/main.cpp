@@ -12920,6 +12920,9 @@ namespace
         bool actor_resolved{};
         bool property_found{};
         bool newly_set{};
+        bool dormancy_property_found{};
+        bool dormancy_was_dormant{};
+        bool dormancy_cleared{};
     };
 
     // Shared by both the periodic (all-guilds) pass and the new
@@ -12982,28 +12985,103 @@ namespace
                 RC::Unreal::FBoolProperty
             >(property);
 
-        if (bool_property == nullptr)
+        if (bool_property != nullptr)
         {
-            return outcome;
-        }
+            outcome.property_found = true;
 
-        outcome.property_found = true;
-
-        if (
-            bool_property->GetPropertyValueInContainer(
-                outer
+            if (
+                !bool_property->
+                    GetPropertyValueInContainer(outer)
             )
-        )
-        {
-            return outcome;
+            {
+                bool_property->
+                    SetPropertyValueInContainer(
+                        outer,
+                        true
+                    );
+
+                outcome.newly_set = true;
+            }
         }
 
-        bool_property->SetPropertyValueInContainer(
-            outer,
-            true
-        );
+        // bAlwaysRelevant only changes the OUTCOME of a future
+        // relevancy check -- it doesn't wake an actor that's already
+        // dormant (Unreal's per-connection network-optimization
+        // state). A dormant actor is skipped from per-connection
+        // relevancy re-evaluation entirely until something flushes
+        // it -- native base-camp entry/exit proximity appears to do
+        // this, which is the likely explanation for "teleport between
+        // bases a few times" working around the no-op bug even with
+        // this mod's own bAlwaysRelevant fix already live. Checked
+        // independently of the property state above (on every call,
+        // not just when bAlwaysRelevant was newly set this pass),
+        // since an actor can still be dormant long after
+        // bAlwaysRelevant was already flipped true on some earlier
+        // pass.
+        auto* dormancy_slot =
+            outer->GetValuePtrByPropertyNameInChain(
+                STR("NetDormancy")
+            );
 
-        outcome.newly_set = true;
+        if (dormancy_slot != nullptr)
+        {
+            outcome.dormancy_property_found = true;
+
+            std::uint8_t current_dormancy{};
+
+            std::memcpy(
+                &current_dormancy,
+                dormancy_slot,
+                sizeof(current_dormancy)
+            );
+
+            if (current_dormancy != 0) // DORM_Never == 0
+            {
+                outcome.dormancy_was_dormant = true;
+
+                auto* set_dormancy_function =
+                    outer->GetFunctionByNameInChain(
+                        STR("SetNetDormancy")
+                    );
+
+                if (set_dormancy_function != nullptr)
+                {
+                    const auto parms_size =
+                        set_dormancy_function->
+                            GetParmsSize();
+
+                    // Real parms byte size for this call was never
+                    // captured ahead of time (no generated Parms
+                    // struct in the reflection dump for it) -- sized
+                    // dynamically off GetParmsSize() rather than
+                    // guessed, with a sane upper bound as a resolution
+                    // sanity check, matching this file's established
+                    // caution around trusting SDK values without
+                    // verifying them live. A zeroed buffer already
+                    // encodes DORM_Never (value 0), so no parameter
+                    // offset lookup is needed the way FULL_PLAN_
+                    // REGISTER's object-parameter write requires.
+                    if (
+                        parms_size > 0 &&
+                        parms_size <= 64
+                    )
+                    {
+                        std::vector<std::byte>
+                            dormancy_parms(
+                                parms_size,
+                                std::byte{0}
+                            );
+
+                        outer->ProcessEvent(
+                            set_dormancy_function,
+                            dormancy_parms.data()
+                        );
+
+                        outcome.dormancy_cleared = true;
+                    }
+                }
+            }
+        }
 
         return outcome;
     }
@@ -13326,6 +13404,9 @@ namespace
             std::uint64_t properties_found{};
             std::uint64_t newly_set{};
             std::uint64_t already_set{};
+            std::uint64_t dormancy_checked{};
+            std::uint64_t dormant_before{};
+            std::uint64_t dormancy_cleared{};
 
             for (
                 const auto& [guild_key, guild] :
@@ -13360,6 +13441,21 @@ namespace
 
                     ++actors_resolved;
 
+                    if (outcome.dormancy_property_found)
+                    {
+                        ++dormancy_checked;
+
+                        if (outcome.dormancy_was_dormant)
+                        {
+                            ++dormant_before;
+                        }
+
+                        if (outcome.dormancy_cleared)
+                        {
+                            ++dormancy_cleared;
+                        }
+                    }
+
                     if (!outcome.property_found)
                     {
                         continue;
@@ -13383,7 +13479,8 @@ namespace
                 "ALWAYS_RELEVANT_EXPERIMENT "
                 "chests_seen=%llu actors_resolved=%llu "
                 "properties_found=%llu already_set=%llu "
-                "newly_set=%llu",
+                "newly_set=%llu dormancy_checked=%llu "
+                "dormant_before=%llu dormancy_cleared=%llu",
                 static_cast<unsigned long long>(
                     chests_seen
                 ),
@@ -13398,6 +13495,15 @@ namespace
                 ),
                 static_cast<unsigned long long>(
                     newly_set
+                ),
+                static_cast<unsigned long long>(
+                    dormancy_checked
+                ),
+                static_cast<unsigned long long>(
+                    dormant_before
+                ),
+                static_cast<unsigned long long>(
+                    dormancy_cleared
                 )
             );
 
@@ -13613,6 +13719,8 @@ namespace
             std::uint64_t actors_resolved{};
             std::uint64_t properties_found{};
             std::uint64_t newly_set{};
+            std::uint64_t dormant_before{};
+            std::uint64_t dormancy_cleared{};
 
             for (
                 const auto& [chest, chest_camp] :
@@ -13645,6 +13753,16 @@ namespace
                 {
                     ++newly_set;
                 }
+
+                if (outcome.dormancy_was_dormant)
+                {
+                    ++dormant_before;
+                }
+
+                if (outcome.dormancy_cleared)
+                {
+                    ++dormancy_cleared;
+                }
             }
 
             emit_format(
@@ -13652,7 +13770,8 @@ namespace
                 "ALWAYS_RELEVANT_ON_JOIN "
                 "guild=%s chests_seen=%llu "
                 "actors_resolved=%llu "
-                "properties_found=%llu newly_set=%llu",
+                "properties_found=%llu newly_set=%llu "
+                "dormant_before=%llu dormancy_cleared=%llu",
                 guid_to_hex(player_guild).data(),
                 static_cast<unsigned long long>(
                     chests_seen
@@ -13665,6 +13784,12 @@ namespace
                 ),
                 static_cast<unsigned long long>(
                     newly_set
+                ),
+                static_cast<unsigned long long>(
+                    dormant_before
+                ),
+                static_cast<unsigned long long>(
+                    dormancy_cleared
                 )
             );
 
